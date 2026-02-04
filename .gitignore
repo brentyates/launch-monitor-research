@@ -1,0 +1,7 @@
+/target
+/screenshots
+/debug_frames
+.DS_Store
+*.local.json
+*.local.md
+*.blend1
