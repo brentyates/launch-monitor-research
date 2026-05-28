@@ -292,8 +292,9 @@ MonoBehaviour:
     width: 512
     height: 384
     portraitMode: 1
-    distortionK1: 0
-    distortionEnabled: 0
+    distortionK1: -0.15
+    distortionK2: 0.02
+    distortionEnabled: 1
     irFilterEnabled: 0
     strobePower: 50
     strobeBeamAngle: 60

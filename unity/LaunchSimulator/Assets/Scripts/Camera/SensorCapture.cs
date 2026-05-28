@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using System;
 using System.Collections.Generic;
+using System.Text;
 using LaunchMonitor.Core;
 
 namespace LaunchMonitor.Camera
@@ -17,6 +18,34 @@ namespace LaunchMonitor.Camera
         public Quaternion ballRotation;
     }
 
+    // Holds context for a single frame capture request
+    public class FrameContext
+    {
+        public int frameIndex;
+        public double timestamp;
+        
+        // Metadata captured at render time
+        public Vector3 ballPosition;
+        public Vector3 ballVelocity;
+        public Quaternion ballRotation;
+
+        // Buffers for pixel data
+        public byte[] cam0Pixels;
+        public byte[] cam1Pixels;
+        
+        // Completion flags
+        public bool cam0Complete;
+        public bool cam1Complete;
+
+        public FrameContext(int index, double time, int pixelCount)
+        {
+            frameIndex = index;
+            timestamp = time;
+            cam0Pixels = new byte[pixelCount];
+            cam1Pixels = new byte[pixelCount];
+        }
+    }
+
     public class SensorCapture : MonoBehaviour
     {
         public static SensorCapture Instance { get; private set; }
@@ -29,20 +58,14 @@ namespace LaunchMonitor.Camera
         public int CapturedFrameCount => capturedFrames.Count;
 
         private List<CapturedFrame> capturedFrames = new List<CapturedFrame>();
-        private Queue<AsyncGPUReadbackRequest> pendingRequests = new Queue<AsyncGPUReadbackRequest>();
+        
+        // We don't need a queue of requests if we use lambdas to capture context,
+        // but we might want to track active contexts if we needed to cancel them.
+        // For now, simpler is better.
+        
         private int frameIndex;
         private double captureStartTime;
         private float captureAccumulator;
-
-        private byte[] pendingCam0Pixels;
-        private byte[] pendingCam1Pixels;
-        private int pendingFrameIndex;
-        private double pendingTimestamp;
-        private Vector3 pendingPosition;
-        private Vector3 pendingVelocity;
-        private Quaternion pendingRotation;
-        private bool cam0Complete;
-        private bool cam1Complete;
 
         public event Action<CapturedFrame> OnFrameCaptured;
         public event Action<List<CapturedFrame>> OnCaptureComplete;
@@ -63,11 +86,6 @@ namespace LaunchMonitor.Camera
                 stereoRig = StereoRig.Instance;
         }
 
-        void Update()
-        {
-            ProcessPendingRequests();
-        }
-
         public void StartCapture()
         {
             if (IsCapturing) return;
@@ -77,11 +95,6 @@ namespace LaunchMonitor.Camera
             captureStartTime = Time.timeAsDouble;
             captureAccumulator = 0f;
             IsCapturing = true;
-
-            pendingCam0Pixels = null;
-            pendingCam1Pixels = null;
-            cam0Complete = false;
-            cam1Complete = false;
         }
 
         public void StopCapture()
@@ -102,29 +115,28 @@ namespace LaunchMonitor.Camera
 
             if (!IsCapturing || stereoRig == null) return;
 
+            // 1. Render immediate
             stereoRig.RenderBothCameras();
 
-            double timestamp = Time.timeAsDouble - captureStartTime;
+            // 2. Capture metadata NOW (while simulation is in this state)
+            double targetFps = TimeController.Instance.TargetFps;
+            double timestamp = frameIndex / targetFps;
+            int pixelCount = stereoRig.config.RenderWidth * stereoRig.config.RenderHeight * 4;
 
-            pendingFrameIndex = frameIndex;
-            pendingTimestamp = timestamp;
+            var context = new FrameContext(frameIndex, timestamp, pixelCount);
 
             var sim = SimulationController.Instance;
             if (sim != null)
             {
-                pendingPosition = sim.BallPositionMm;
-                pendingVelocity = sim.BallVelocityMmS;
-                pendingRotation = sim.BallRotation;
+                context.ballPosition = sim.BallPositionMm;
+                context.ballVelocity = sim.BallVelocityMmS;
+                context.ballRotation = sim.BallRotation;
             }
 
-            int pixelCount = stereoRig.config.RenderWidth * stereoRig.config.RenderHeight * 4;
-            pendingCam0Pixels = new byte[pixelCount];
-            pendingCam1Pixels = new byte[pixelCount];
-            cam0Complete = false;
-            cam1Complete = false;
-
-            var cam0Request = AsyncGPUReadback.Request(stereoRig.Cam0RenderTexture, 0, TextureFormat.RGBA32, OnCam0ReadbackComplete);
-            var cam1Request = AsyncGPUReadback.Request(stereoRig.Cam1RenderTexture, 0, TextureFormat.RGBA32, OnCam1ReadbackComplete);
+            // 3. Request readback with context
+            // We use lambdas to pass the specific context to the callback
+            AsyncGPUReadback.Request(stereoRig.Cam0RenderTexture, 0, TextureFormat.RGBA32, (req) => OnCam0ReadbackComplete(req, context));
+            AsyncGPUReadback.Request(stereoRig.Cam1RenderTexture, 0, TextureFormat.RGBA32, (req) => OnCam1ReadbackComplete(req, context));
 
             frameIndex++;
         }
@@ -152,95 +164,115 @@ namespace LaunchMonitor.Camera
             return false;
         }
 
-        private int cam0ReadbackCount;
-
-        private void OnCam0ReadbackComplete(AsyncGPUReadbackRequest request)
+        private void OnCam0ReadbackComplete(AsyncGPUReadbackRequest request, FrameContext context)
         {
-            cam0ReadbackCount++;
-
-            if (request.hasError || pendingCam0Pixels == null)
+            if (request.hasError)
             {
-                if (request.hasError) Debug.LogError($"Cam0 readback #{cam0ReadbackCount} failed");
+                Debug.LogError($"Cam0 readback failed for frame {context.frameIndex}");
                 return;
             }
 
             var data = request.GetData<byte>();
-            if (data.IsCreated && data.Length == pendingCam0Pixels.Length)
+            if (data.IsCreated && data.Length == context.cam0Pixels.Length)
             {
-                data.CopyTo(pendingCam0Pixels);
-                cam0Complete = true;
-                TryFinalizeFrame();
+                // Diagnostic: Log first 10 pixels
+                if (context.frameIndex % 60 == 0 || context.frameIndex == 0)
+                {
+                    StringBuilder sb = new StringBuilder();
+                    sb.Append($"[SensorCapture] Frame {context.frameIndex} Cam0 Pixels (first 10): ");
+                    for (int i = 0; i < Math.Min(10, data.Length / 4); i++) // Log up to 10 pixels, each 4 bytes
+                    {
+                        int offset = i * 4;
+                        byte r = data[offset];
+                        byte g = data[offset + 1];
+                        byte b = data[offset + 2];
+                        byte a = data[offset + 3];
+                        sb.Append($"[{i}: R={r} G={g} B={b} A={a}] ");
+                    }
+                    Debug.Log(sb.ToString());
+                }
+
+                data.CopyTo(context.cam0Pixels);
+                context.cam0Complete = true;
+                TryFinalizeFrame(context);
             }
         }
 
-        private void OnCam1ReadbackComplete(AsyncGPUReadbackRequest request)
+        private void OnCam1ReadbackComplete(AsyncGPUReadbackRequest request, FrameContext context)
         {
-            if (request.hasError || pendingCam1Pixels == null)
+            if (request.hasError)
             {
-                if (request.hasError) Debug.LogError("Cam1 readback failed");
+                Debug.LogError($"Cam1 readback failed for frame {context.frameIndex}");
                 return;
             }
 
             var data = request.GetData<byte>();
-            if (data.IsCreated && data.Length == pendingCam1Pixels.Length)
+            if (data.IsCreated && data.Length == context.cam1Pixels.Length)
             {
-                data.CopyTo(pendingCam1Pixels);
-                cam1Complete = true;
-                TryFinalizeFrame();
+                // Diagnostic: Log first 10 pixels
+                if (context.frameIndex % 60 == 0 || context.frameIndex == 0)
+                {
+                    StringBuilder sb = new StringBuilder();
+                    sb.Append($"[SensorCapture] Frame {context.frameIndex} Cam1 Pixels (first 10): ");
+                    for (int i = 0; i < Math.Min(10, data.Length / 4); i++) // Log up to 10 pixels, each 4 bytes
+                    {
+                        int offset = i * 4;
+                        byte r = data[offset];
+                        byte g = data[offset + 1];
+                        byte b = data[offset + 2];
+                        byte a = data[offset + 3];
+                        sb.Append($"[{i}: R={r} G={g} B={b} A={a}] ");
+                    }
+                    Debug.Log(sb.ToString());
+                }
+
+                data.CopyTo(context.cam1Pixels);
+                context.cam1Complete = true;
+                TryFinalizeFrame(context);
             }
         }
 
         private int finalizeCount;
 
-        private void TryFinalizeFrame()
+        private void TryFinalizeFrame(FrameContext context)
         {
-            if (!cam0Complete || !cam1Complete) return;
+            if (!context.cam0Complete || !context.cam1Complete) return;
 
             finalizeCount++;
             if (finalizeCount <= 3)
             {
-                Debug.Log($"TryFinalizeFrame #{finalizeCount}: both cameras ready, invoking OnFrameCaptured");
+                Debug.Log($"TryFinalizeFrame #{finalizeCount}: both cameras ready for frame {context.frameIndex}, invoking OnFrameCaptured");
             }
 
             var frame = new CapturedFrame
             {
-                frameIndex = pendingFrameIndex,
-                timestamp = pendingTimestamp,
-                cam0Pixels = pendingCam0Pixels,
-                cam1Pixels = pendingCam1Pixels,
-                ballPosition = pendingPosition,
-                ballVelocity = pendingVelocity,
-                ballRotation = pendingRotation
+                frameIndex = context.frameIndex,
+                timestamp = context.timestamp,
+                cam0Pixels = context.cam0Pixels,
+                cam1Pixels = context.cam1Pixels,
+                ballPosition = context.ballPosition, // This is now the CORRECT position from render time!
+                ballVelocity = context.ballVelocity,
+                ballRotation = context.ballRotation
             };
 
+            // Note: Since readbacks are async, frames might complete out of order slightly,
+            // but we add them to the list. If order matters for processing, we might need to sort later
+            // or insert based on index. For now, append is fine, the consumer checks indices.
+            
+            // To be safe for linear processing, strict append is okay if we assume readbacks finish roughly in order
+            // or if the consumer handles out-of-order. Rust pipeline sorts by timestamp/index usually?
+            // Let's just Add.
             capturedFrames.Add(frame);
+            
             OnFrameCaptured?.Invoke(frame);
-
-            pendingCam0Pixels = null;
-            pendingCam1Pixels = null;
-            cam0Complete = false;
-            cam1Complete = false;
-        }
-
-        private void ProcessPendingRequests()
-        {
-            while (pendingRequests.Count > 0)
-            {
-                var request = pendingRequests.Peek();
-                if (request.done)
-                {
-                    pendingRequests.Dequeue();
-                }
-                else
-                {
-                    break;
-                }
-            }
         }
 
         public List<CapturedFrame> GetCapturedFrames()
         {
-            return new List<CapturedFrame>(capturedFrames);
+            // Sort by frame index to ensure stable order for consumers
+            var list = new List<CapturedFrame>(capturedFrames);
+            list.Sort((a, b) => a.frameIndex.CompareTo(b.frameIndex));
+            return list;
         }
 
         public void ClearFrames()
@@ -251,9 +283,22 @@ namespace LaunchMonitor.Camera
 
         public void TruncateToFrame(int targetFrameIndex)
         {
-            if (targetFrameIndex < capturedFrames.Count)
+            // Sort first
+            capturedFrames.Sort((a, b) => a.frameIndex.CompareTo(b.frameIndex));
+            
+            // Allow removal
+            // Find removal start
+            int removeStart = -1;
+            for(int i=0; i<capturedFrames.Count; i++) {
+                if (capturedFrames[i].frameIndex >= targetFrameIndex) {
+                    removeStart = i;
+                    break;
+                }
+            }
+            
+            if (removeStart != -1)
             {
-                capturedFrames.RemoveRange(targetFrameIndex, capturedFrames.Count - targetFrameIndex);
+                capturedFrames.RemoveRange(removeStart, capturedFrames.Count - removeStart);
                 frameIndex = targetFrameIndex;
             }
         }

@@ -1,203 +1,68 @@
-# Launch Monitor Research
+# CLAUDE.md
 
-Golf ball launch monitor research project with computer vision algorithms for tracking and spin detection. Supports multiple camera configurations (overhead, side-mounted, rear) with stereo triangulation.
-
-Rust crate: `launch_monitor_research`
-
-## Project Structure
-
-```
-src/
-  lib.rs              # Main library exports
-  main.rs             # WebSocket server binary (lm-server)
-  server.rs           # Frame receiver + CV pipeline (WebSocket mode)
-  shared_memory.rs    # Frame receiver + CV pipeline (Unity mode)
-  ball_detector.rs    # Ball detection in frames
-  triangulation.rs    # Stereo triangulation for VLA/HLA/speed
-  spin_detector.rs    # Spin detection via pattern matching
-  config.rs           # Camera rig configuration
-  debug.rs            # Debug visualization overlays
-
-simulator/
-  index.html          # Three.js stereo flight simulator
-  tp5_pix_ball.glb    # TP5 Pix ball model
-
-unity/LaunchSimulator/ # Unity 6 stereo simulator (realistic artifacts)
-  Assets/Scripts/
-    Core/             # SimulationController, TimeController, GolfBall, CalibrationBoard
-    Camera/           # StereoRig, SensorCapture, CameraSensorFeature, IRSimulation
-    Transport/        # SharedMemoryWriter (IPC to Rust)
-    UI/               # SimulatorUI, StereoDisplayView
-  Assets/Shaders/
-    CameraSensor.shader    # Unified sensor simulation (noise, distortion, IR)
-```
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
 
 ```bash
-# Build and run WebSocket server (Three.js mode)
-cargo run
+cargo build --release --bin lm-test    # Build release binary
+cargo check                            # Type-check without building
+cargo test                             # Run unit tests
 
-# Run with Unity shared memory mode
-cargo run -- --unity
+./scripts/test-e2e.sh                  # Full E2E: builds Rust, launches Unity, runs all test cases
+./scripts/run.sh                       # Launch Unity + Rust together (requires pre-built binary)
+./scripts/build-unity.sh               # Build Unity project from CLI (requires Unity 6000.4.3f1)
+./scripts/cleanup.sh                   # Kill stale processes, remove shared memory file
 
-# Check compilation
-cargo check
-
-# Run tests
-cargo test
-
-# Open Three.js simulator in browser
-open simulator/index.html
-
-# Open Unity project (requires Unity 6)
-# Unity Hub -> Add -> unity-simulator/
+RUST_LOG=debug cargo run               # Run with debug logging
 ```
+
+The binary is `lm-test`. There is no separate `lm-server` or WebSocket mode in the current code — the only frame source is shared memory from Unity.
 
 ## Architecture
 
-### Rust CV Pipeline
+Stereo CV pipeline that receives frames from a Unity 6 simulator via shared memory, detects a golf ball in each stereo view, triangulates 3D positions, estimates launch parameters, and detects spin.
 
-The WebSocket server (`lm-server`) receives stereo frames from the browser simulator:
-
-1. **Frame Reception** - Binary WebSocket messages with left/right RGBA frames
-2. **Ball Detection** - Find ball centroid in each camera view
-3. **Stereo Triangulation** - Compute 3D position from matched detections
-4. **Launch Estimation** - Fit velocity vector to 3D positions over time
-5. **Spin Detection** - Track TP5 Pix chevron pattern rotation
-
-### Three.js Simulator
-
-Browser-based test environment with two modes:
-
-- **Stereo Simulation** - Dual camera views, flight physics, frame streaming
-- **Ball Inspector** - OrbitControls for close-up ball model inspection
-
-Configurable parameters:
-- Launch: speed, VLA, HLA, spin RPM, spin axis
-- Camera: FPS, FOV, resolution, baseline, height, forward offset
-- Ball: starting orientation (pitch/yaw/roll)
-
-### Unity 6 Simulator
-
-Higher fidelity simulator with realistic camera artifacts:
-
-- **Physics**: 4kHz fixed timestep (vs per-frame in Three.js)
-- **Capture**: AsyncGPUReadback for non-blocking frame capture
-- **IPC**: Shared memory ring buffer (faster than WebSocket)
-- **Rendering**: URP with proper lighting and materials
-
-Run with `cargo run -- --unity` to use shared memory mode.
-
-### Camera Configurations
-
-Default is overhead stereo rig, but camera positions are configurable:
-
-```javascript
-// In simulator/index.html
-CAM_HEIGHT = 3048;    // mm above ground
-CAM_FORWARD = 1092;   // mm forward of hitting zone
-BASELINE = 350;       // stereo separation
-```
-
-Modify these to simulate side-mounted or rear-mounted configurations.
-
-## WebSocket Protocol (Three.js)
-
-1. Browser sends JSON metadata: `{type: 'meta', width, height, frameCount, fps, groundTruth}`
-2. Browser sends binary frames: `[frameIndex:u32][left RGBA][right RGBA]`
-3. Browser sends JSON end: `{type: 'end'}`
-4. Server responds with JSON: `{frame_count, ball_detections, launch, spin_result, errors}`
-
-## Shared Memory Protocol (Unity)
-
-Ring buffer with 3 frame slots at `/dev/shm/LaunchMonitorSharedMemory`:
+### Data Flow
 
 ```
-[SharedHeader: ~80 bytes]
-  magic: 0x474F4C46 ("GOLF")
-  state: 0=idle, 1=ready, 2=streaming, 3=complete
-  writeHead, frameCount, width, height, fps
-  groundTruth: speedMph, vlaDeg, hlaDeg, spinRpm, spinAxisDeg
-
-[Frame 0..2]
-  [FrameHeader: frameIndex, timestamp, ballPosition, ballVelocity]
-  [Left RGBA pixels]
-  [Right RGBA pixels]
+Unity Simulator (4kHz physics, configurable render FPS)
+  → Shared memory ring buffer ({project_dir}/LaunchMonitorSharedMemory, 12 slots)
+    → SharedMemorySource reads frames, flips Y, converts RGBA→Gray
+      → BallDetector: background subtraction → peak finding → weighted centroid
+        → StereoTriangulator: DLT-SVD triangulation → least-squares velocity fit
+          → SpinDetector: TP5 Pix chevron pattern matching (coarse→medium→fine search)
+            → ProcessingResult { launch, spin, ground_truth, errors }
 ```
 
-Unity writes frames, Rust polls `writeHead` and processes when `state=complete`.
+### Module Responsibilities
 
-## Camera Simulation
+| Module | Purpose |
+|--------|---------|
+| `frame_source/shared_memory.rs` | Mmap-based reader for Unity's ring buffer. Handles volatile reads, Y-flip, RGBA→Gray conversion |
+| `ball_detector.rs` | Temporal-minimum background model, peak-based detection with weighted centroid |
+| `triangulation.rs` | OpenCV-style projection matrices (P = K[R|t]), DLT-SVD triangulation, velocity fitting with outlier rejection (mean ± 2σ) |
+| `spin_detector.rs` | 3-stage exhaustive search (273K hypotheses at coarse, parallelized with Rayon) over RPM/axis/orientation. Scores by projecting TP5 Pix chevron geometry onto detected features |
+| `pipeline.rs` | Orchestrator — runs detection, filters consecutive pairs (max 3-frame gap), filters by median radius, triangulates, estimates spin |
+| `config.rs` | `StereoRig::overhead()` — computes intrinsics and converging (toe-in) camera extrinsics from physical parameters |
+| `debug.rs` | Overlay rendering (circles, lines, text) onto gray frames, saves annotated PNGs to `debug_frames/` |
+| `main.rs` | Test harness — connects to shared memory, runs 3 test cases (driver/7-iron/wedge), compares against ground truth |
 
-All sensor effects are handled by a unified `CameraSensorFeature` URP renderer feature.
+### Shared Memory Protocol
 
-**Setup**: Add `CameraSensorFeature` to your URP Renderer asset.
+Header (104 bytes) followed by 12 frame slots. Unity writes, Rust polls `write_head`. States: Idle(0) → Ready(1) → Streaming(2) → Complete(3). Rust sends commands back via `rust_command` field in header (1=launch with params, 2=reset).
 
-### Sensor Noise (Physically-Based)
+### Coordinate/Unit Conventions
 
-Realistic noise model with two components applied identically in IR and color modes:
+- Positions: millimeters. Velocities: mm/s internally, converted to mph for output
+- Angles: radians in computation, degrees in display/output
+- Variable suffixes encode units: `_mm`, `_deg`, `_mph`, `_s`
+- Camera model: standard CV convention where `t = -(R * camera_position)`
 
-- **Shot noise**: Signal-dependent (σ ∝ √brightness), simulates photon counting statistics
-- **Read noise**: Constant floor from sensor electronics
+### Key Design Decisions
 
-Parameters in `StereoConfig`:
-- `noiseEnabled`: Toggle noise on/off
-- `shotNoiseScale`: Shot noise intensity (0.02-0.1 typical)
-- `readNoiseScale`: Read noise intensity (0.01-0.05 typical)
-
-### Lens Distortion (Brown-Conrady Model)
-
-Radial distortion matching standard CV calibration:
-```
-x' = x(1 + k1·r² + k2·r⁴)
-y' = y(1 + k1·r² + k2·r⁴)
-```
-
-Parameters in `StereoConfig`:
-- `distortionK1`: First radial coefficient (-0.5 to 0.1, typical: -0.15 for barrel)
-- `distortionK2`: Second radial coefficient (-0.1 to 0.2, typical: 0.02)
-- `distortionEnabled`: Toggle distortion on/off
-
-### Calibration Board
-
-Standard checkerboard pattern for camera calibration:
-- Default: 9×6 inner corners (10×7 squares)
-- Square size: 25mm (fits on A4/Letter paper: 250mm × 175mm)
-- Add `CalibrationBoard` component to a GameObject in scene
-
-The same calibration code in Rust works for both simulated and real cameras.
-
-### IR Camera Simulation
-
-Toggle `irFilterEnabled` for monochrome view with:
-- Grayscale conversion with configurable contrast (`irContrast`)
-- Same sensor noise as color mode (unified pipeline)
-- LED strobe lighting (configurable power and beam angle)
-
-## Key Algorithms
-
-### Stereo Triangulation
-Uses converging (toe-in) cameras with OpenCV-style projection matrices. Ball centroid detected in both views, triangulated to 3D position.
-
-### Spin Detection
-Pattern-aware rotation estimation using known TP5 Pix chevron positions. Exhaustive search over RPM (0-15000), axis angles (±45°), and initial orientations.
-
-### Ball Detection
-Threshold + contour detection on grayscale frames. Works with small balls (tested down to 4px diameter).
-
-## Ground Truth Validation
-
-Simulator provides exact launch parameters as ground truth. Server response includes error comparison:
-- Speed error: < 2% is good
-- VLA/HLA error: < 1° is good
-- Spin: depends on ball size and FPS
-
-## Dependencies
-
-- `nalgebra` - Linear algebra
-- `image` / `imageproc` - Image processing
-- `tokio` / `axum` - Async HTTP/WebSocket server
-- `memmap2` - Shared memory (Unity mode)
-- `serde` / `serde_json` - Serialization
-- `tracing` - Logging
+- **Converging stereo** (toe-in) rather than parallel baseline — convergence point computed from FOV and hitting zone size
+- **Temporal minimum background** — no separate calibration; background model built from min pixel values across all frames in the shot
+- **12-slot ring buffer** — fixed memory, prevents unbounded growth
+- **3-stage spin search** — coarse (25 RPM steps) → medium (5 RPM) → fine (1 RPM), each narrowing the search window
+- **Outlier rejection** — velocity fit uses residual-based filtering (mean + 2σ threshold) when ≥4 frames available

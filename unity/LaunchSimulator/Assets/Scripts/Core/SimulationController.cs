@@ -199,6 +199,13 @@ namespace LaunchMonitor.Core
             wasEverVisible = false;
             framesOutsideView = 0;
 
+            // Realism: The ball and environment stay on Layer 0.
+            // Only hide virtual/debug objects from IR sensor.
+            if (trailRenderer != null)
+            {
+                trailRenderer.gameObject.layer = 31;
+            }
+
             SetState(SimulationState.Flight);
         }
 
@@ -445,6 +452,31 @@ namespace LaunchMonitor.Core
         public static Vector3 UnityToMmPosition(Vector3 posUnity)
         {
             return new Vector3(posUnity.x * 1000f, -posUnity.z * 1000f, posUnity.y * 1000f);
+        }
+
+        private bool IsBallObject(GameObject go)
+        {
+            if (ballTransform == null) return false;
+            Transform t = go.transform;
+            while (t != null)
+            {
+                if (t == ballTransform) return true;
+                t = t.parent;
+            }
+            return false;
+        }
+
+        private bool IsStereoRigObject(GameObject go)
+        {
+            var rig = StereoRig.Instance;
+            if (rig == null) return false;
+            Transform t = go.transform;
+            while (t != null)
+            {
+                if (t == rig.transform) return true;
+                t = t.parent;
+            }
+            return false;
         }
     }
 }

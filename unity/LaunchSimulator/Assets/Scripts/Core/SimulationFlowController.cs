@@ -2,6 +2,7 @@ using UnityEngine;
 using System.Collections;
 using LaunchMonitor.Camera;
 using LaunchMonitor.Transport;
+using UnityEngine.Rendering.Universal;
 
 namespace LaunchMonitor.Core
 {
@@ -13,6 +14,7 @@ namespace LaunchMonitor.Core
         [SerializeField] private StereoRig stereoRig;
         [SerializeField] private SensorCapture sensorCapture;
         [SerializeField] private SharedMemoryWriter sharedMemory;
+        [SerializeField] private CalibrationBoard calibrationBoard;
 
         [Header("Auto Processing")]
         [SerializeField] private bool autoProcessOnComplete = false;
@@ -82,6 +84,8 @@ namespace LaunchMonitor.Core
                 sensorCapture = SensorCapture.Instance;
             if (sharedMemory == null)
                 sharedMemory = SharedMemoryWriter.Instance;
+            if (calibrationBoard == null)
+                calibrationBoard = CalibrationBoard.Instance;
         }
 
         private void SubscribeEvents()
@@ -115,7 +119,9 @@ namespace LaunchMonitor.Core
 
         private void OnFrameCapturedHandler(CapturedFrame frame)
         {
-            if (simulation == null || simulation.State != SimulationState.Flight)
+            // Allow streaming if we are in Flight OR if calibration board is visible (Calibration mode)
+            bool isCalibration = calibrationBoard != null && calibrationBoard.IsVisible;
+            if (simulation == null || (simulation.State != SimulationState.Flight && !isCalibration))
                 return;
 
             frameCapturedCount++;
@@ -154,6 +160,16 @@ namespace LaunchMonitor.Core
                     spinAxisDeg = cmd.spinAxisDeg
                 };
 
+                // Restore camera settings after calibration
+                RestoreCameraSettings();
+
+                // FIX: Update shared memory state so Rust knows we are starting
+                if (sharedMemory != null && sharedMemory.IsConnected)
+                {
+                    // Target total frames (e.g. 60)
+                    sharedMemory.SetReady(simulation.launchParams, 60);
+                }
+
                 autoProcessOnComplete = true;
                 Debug.Log("About to call simulation.Launch()");
                 simulation.Launch();
@@ -162,7 +178,89 @@ namespace LaunchMonitor.Core
             else if (cmd.command == (int)RustCommand.Reset)
             {
                 Debug.Log("Received reset command from Rust");
+                
+                if (calibrationBoard != null)
+                    calibrationBoard.SetVisible(false);
+
                 simulation.ResetSimulation();
+                
+                // Force shared memory to Idle state (in case sim was already Idle)
+                if (sharedMemory != null && sharedMemory.IsConnected)
+                {
+                    sharedMemory.SetIdle();
+                }
+            }
+            else if (cmd.command == (int)RustCommand.Calibrate)
+            {
+                Debug.Log("Received calibrate command from Rust");
+
+                if (calibrationBoard != null)
+                {
+                    calibrationBoard.squareSizeMm = 50f;
+                    calibrationBoard.CreateBoard();
+                    
+                    // Force the simulation to Idle if not already
+                    if (simulation.State != SimulationState.Idle)
+                    {
+                        simulation.ResetSimulation();
+                    }
+
+                    // Disable Camera Sensor Effects for Calibration (so we can see!)
+                    if (stereoRig != null)
+                    {
+                        // FIX: Position board 1.5 meters in front of rig so it's visible
+                        // Ensure it's perfectly centered and parallel to the rig's baseline
+                        calibrationBoard.transform.position = stereoRig.transform.position + stereoRig.transform.forward * 1.5f;
+                        calibrationBoard.transform.rotation = stereoRig.transform.rotation;
+                        calibrationBoard.transform.Rotate(90, 0, 0); // Face the rig (Corrected from -90)
+                        
+                        calibrationBoard.SetVisible(true);
+
+                        // FIX: Force cameras to LookAt the board center symmetrically
+                        stereoRig.config.exposureSimEnabled = false;
+                        stereoRig.config.noiseEnabled = false;
+                        stereoRig.config.irFilterEnabled = false; // Calibration uses ambient
+                        stereoRig.config.distortionEnabled = true; // Enable distortion so we can calibrate it!
+                        stereoRig.ApplyConfiguration();
+
+                        stereoRig.Cam0.transform.LookAt(calibrationBoard.transform);
+                        stereoRig.Cam1.transform.LookAt(calibrationBoard.transform);
+
+                        // Force SolidColor for both cameras
+                        stereoRig.Cam0.clearFlags = CameraClearFlags.SolidColor;
+                        stereoRig.Cam1.clearFlags = CameraClearFlags.SolidColor;
+                        stereoRig.Cam0.backgroundColor = Color.gray;
+                        stereoRig.Cam1.backgroundColor = Color.gray;
+                        stereoRig.Cam0.cullingMask = -1;
+                        stereoRig.Cam1.cullingMask = -1;
+
+                        Debug.Log($"[SimulationFlowController] Calibration Stage: Board at {calibrationBoard.transform.position}, Cam0 at {stereoRig.Cam0.transform.position}");
+
+                        // Force bright ambient for calibration board visibility
+                        // MUST BE AFTER ApplyConfiguration because DisableIRMode resets it
+                        RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+                        RenderSettings.ambientLight = Color.white;
+                        RenderSettings.ambientIntensity = 1.0f;
+
+                        // Ensure subsequent IR mode enable works
+                        stereoRig.ResetIRState();
+                    }
+
+                    // Tell shared memory we are ready/streaming so Rust can see the board
+                    // We don't need flight buffering, just live frames
+                    if (sharedMemory != null && sharedMemory.IsConnected)
+                    {
+                        // Use default/zero params for calibration
+                        var emptyParams = new LaunchParameters();
+                        // Set frame count to 0 or arbitrary high number since we are just streaming
+                        sharedMemory.SetReady(emptyParams, 0); 
+                        sharedMemory.SetStreaming();
+                    }
+                }
+                else
+                {
+                    Debug.LogError("CalibrationBoard reference is missing!");
+                }
             }
         }
 
@@ -172,6 +270,10 @@ namespace LaunchMonitor.Core
             {
                 case SimulationState.Idle:
                     StopFlightBuffering();
+                    if (sharedMemory != null && sharedMemory.IsConnected)
+                    {
+                        sharedMemory.SetIdle();
+                    }
                     break;
 
                 case SimulationState.Flight:
@@ -260,20 +362,28 @@ namespace LaunchMonitor.Core
 
         public void ProcessFrames()
         {
-            var frames = sensorCapture.GetCapturedFrames();
+            var allFrames = sensorCapture.GetCapturedFrames();
+            var frames = capturedFrameCount > 0 && capturedFrameCount < allFrames.Count
+                ? allFrames.GetRange(0, capturedFrameCount)
+                : allFrames;
+
             if (frames.Count == 0)
             {
                 Debug.LogWarning("No frames to process");
                 return;
             }
 
+            Debug.Log($"Processing {frames.Count} flight frames (of {allFrames.Count} total captured)");
+
             EnsureSharedMemoryConnection();
 
             sharedMemory.SetReady(simulation.launchParams, frames.Count);
             sharedMemory.SetStreaming();
 
-            foreach (var frame in frames)
+            for (int i = 0; i < frames.Count; i++)
             {
+                var frame = frames[i];
+                frame.frameIndex = i;
                 sharedMemory.WriteFrame(frame);
             }
 
@@ -320,6 +430,43 @@ namespace LaunchMonitor.Core
         {
             autoProcessOnComplete = true;
             simulation.Launch();
+        }
+
+        private void RestoreCameraSettings()
+        {
+            Debug.Log("[SimulationFlowController] Restoring Camera Settings for Launch");
+            
+            if (calibrationBoard != null)
+                calibrationBoard.SetVisible(false);
+
+            if (stereoRig != null)
+            {
+                // Restore IR mode for launch
+                stereoRig.config.exposureSimEnabled = true; 
+                stereoRig.config.noiseEnabled = true; 
+                stereoRig.config.distortionEnabled = true; 
+                stereoRig.config.irFilterEnabled = true;   
+                stereoRig.config.ambientLux = 0f;
+                stereoRig.config.strobePower = 500f; // Higher power for better Signal-to-Noise
+                stereoRig.config.readNoiseScale = 0.005f; // Realistic read noise
+                stereoRig.config.shotNoiseScale = 0.01f;
+                stereoRig.ApplyConfiguration();
+
+                stereoRig.Cam0.backgroundColor = Color.black; 
+                stereoRig.Cam1.backgroundColor = Color.black;
+                stereoRig.Cam0.clearFlags = CameraClearFlags.SolidColor;
+                stereoRig.Cam1.clearFlags = CameraClearFlags.SolidColor;
+                
+                // ISOLATION: Cull ONLY virtual/debug objects (Layer 31)
+                // We keep everything else (Default, Floor, Grass, etc.) for realism
+                stereoRig.Cam0.cullingMask = ~(1 << 31); 
+                stereoRig.Cam1.cullingMask = ~(1 << 31);
+
+                var data0 = stereoRig.Cam0.GetComponent<UniversalAdditionalCameraData>();
+                if (data0 != null) data0.renderPostProcessing = true; 
+                var data1 = stereoRig.Cam1.GetComponent<UniversalAdditionalCameraData>();
+                if (data1 != null) data1.renderPostProcessing = true;
+            }
         }
     }
 }

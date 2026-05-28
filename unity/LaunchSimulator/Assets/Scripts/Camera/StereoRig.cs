@@ -99,10 +99,10 @@ namespace LaunchMonitor.Camera
         public bool noiseEnabled = false;
         [Tooltip("Shot noise scale. Realistic range: 0.02-0.1. Simulates photon counting noise (brighter = more noise).")]
         [Range(0f, 0.2f)]
-        public float shotNoiseScale = 0.05f;
+        public float shotNoiseScale = 0.005f; // Reduced from 0.05f to avoid high-gain saturation
         [Tooltip("Read noise scale. Realistic range: 0.01-0.05. Constant sensor electronics noise.")]
         [Range(0f, 0.1f)]
-        public float readNoiseScale = 0.02f;
+        public float readNoiseScale = 0.002f; // Reduced from 0.02f
 
         [Header("Exposure Simulation")]
         public bool exposureSimEnabled = false;
@@ -154,6 +154,11 @@ namespace LaunchMonitor.Camera
             float wellCapacityNormalized = 1.0f;
             float signalLevel = totalEnergy * sensorQE / wellCapacityNormalized;
 
+            if (UnityEngine.Random.value < 0.01f) // Log 1% of frames to avoid spam
+            {
+                Debug.Log($"[StereoRig] Signal: {signalLevel:F4} (Strobe: {strobeEnergy:F6}, Ambient: {ambientEnergy:F6}, IR Filter: {irFilterEnabled}, Strobe Power: {strobePower})");
+            }
+
             return Mathf.Clamp01(signalLevel);
         }
 
@@ -195,7 +200,7 @@ namespace LaunchMonitor.Camera
         public float distortionK1 = -0.15f;
         [Tooltip("Second radial distortion coefficient. Corrects higher-order distortion. Typical: 0.01 to 0.05")]
         public float distortionK2 = 0.02f;
-        public bool distortionEnabled = false;
+        public bool distortionEnabled = true;
 
         [Header("IR Simulation")]
         public bool irFilterEnabled = false;
@@ -345,6 +350,11 @@ namespace LaunchMonitor.Camera
             irSimulation = irGo.AddComponent<IRSimulation>();
         }
 
+        public void ResetIRState()
+        {
+            irWasEnabled = false;
+        }
+
         public void ApplyConfiguration()
         {
             UpdateCameraPositions();
@@ -389,6 +399,7 @@ namespace LaunchMonitor.Camera
 
             CameraSensorFeature.GrayscaleEnabled = config.irFilterEnabled;
             CameraSensorFeature.Contrast = 1.0f;
+            CameraSensorFeature.DistortionEnabled = config.distortionEnabled;
 
             distortionWasEnabled = config.distortionEnabled;
         }
@@ -407,6 +418,7 @@ namespace LaunchMonitor.Camera
 
         private void EnableIRMode()
         {
+            Debug.Log("[StereoRig] Enabling IR Mode - Setting ambient to black, disabling directional light");
             if (sceneDirectionalLight != null)
                 sceneDirectionalLight.intensity = 0f;
 
@@ -423,15 +435,18 @@ namespace LaunchMonitor.Camera
             ConfigureStrobeForIR(cam0Strobe);
             ConfigureStrobeForIR(cam1Strobe);
 
-            cam0.backgroundColor = Color.black;
+            cam0.backgroundColor = Color.black; 
             cam1.backgroundColor = Color.black;
+            cam0.clearFlags = CameraClearFlags.SolidColor;
+            cam1.clearFlags = CameraClearFlags.SolidColor;
 
-            if (irSimulation != null)
-                irSimulation.EnableIR();
+            var ir = GetComponent<IRSimulation>();
+            if (ir != null) ir.EnableIR();
         }
 
         private void DisableIRMode()
         {
+            Debug.Log("[StereoRig] Disabling IR Mode - Restoring scene lighting");
             if (sceneDirectionalLight != null)
                 sceneDirectionalLight.intensity = originalDirectionalIntensity;
 
@@ -445,14 +460,17 @@ namespace LaunchMonitor.Camera
             RenderSettings.ambientLight = originalAmbientLight;
             RenderSettings.ambientIntensity = originalAmbientIntensity;
 
-            RestoreStrobe(cam0Strobe);
-            RestoreStrobe(cam1Strobe);
+            // Restore strobe to invisible
+            if (cam0Strobe != null) cam0Strobe.intensity = 0f;
+            if (cam1Strobe != null) cam1Strobe.intensity = 0f;
 
-            cam0.backgroundColor = new Color(0.1f, 0.1f, 0.15f);
-            cam1.backgroundColor = new Color(0.1f, 0.1f, 0.15f);
+            cam0.backgroundColor = new Color(0.1f, 0.1f, 0.2f, 1f); // Dark blue sky
+            cam1.backgroundColor = new Color(0.1f, 0.1f, 0.2f, 1f);
+            cam0.clearFlags = CameraClearFlags.Skybox;
+            cam1.clearFlags = CameraClearFlags.Skybox;
 
-            if (irSimulation != null)
-                irSimulation.DisableIR();
+            var ir = GetComponent<IRSimulation>();
+            if (ir != null) ir.DisableIR();
         }
 
         private void ConfigureStrobeForIR(Light strobe)
@@ -462,10 +480,11 @@ namespace LaunchMonitor.Camera
             strobe.type = LightType.Spot;
             strobe.spotAngle = config.strobeBeamAngle;
             strobe.innerSpotAngle = config.strobeBeamAngle * 0.7f;
-            strobe.intensity = config.strobePower;
+            strobe.intensity = 1.0f; // Shape only, Realistic scaling is done in Shader
             strobe.range = 50f;
             strobe.color = Color.white;
             strobe.shadows = LightShadows.None;
+            strobe.cullingMask = -1; // Ensure it hits all layers including isolated ball
         }
 
         public void UpdateStrobeSettings()
@@ -668,13 +687,23 @@ namespace LaunchMonitor.Camera
 
         private void UpdateRenderTextures()
         {
-            ReleaseRenderTextures();
+            // Ensure render textures are created with the correct dimensions and format
+            // Increase depth bits to 24 for proper 3D rendering
+            if (Cam0RenderTexture == null || Cam0RenderTexture.width != config.RenderWidth || Cam0RenderTexture.height != config.RenderHeight)
+            {
+                Destroy(Cam0RenderTexture);
+                Cam0RenderTexture = new RenderTexture(config.RenderWidth, config.RenderHeight, 24, RenderTextureFormat.ARGB32);
+                Cam0RenderTexture.Create();
+            }
+            if (Cam1RenderTexture == null || Cam1RenderTexture.width != config.RenderWidth || Cam1RenderTexture.height != config.RenderHeight)
+            {
+                Destroy(Cam1RenderTexture);
+                Cam1RenderTexture = new RenderTexture(config.RenderWidth, config.RenderHeight, 24, RenderTextureFormat.ARGB32);
+                Cam1RenderTexture.Create();
+            }
 
-            Cam0RenderTexture = new RenderTexture(config.RenderWidth, config.RenderHeight, 24, RenderTextureFormat.ARGB32);
-            Cam0RenderTexture.Create();
-
-            Cam1RenderTexture = new RenderTexture(config.RenderWidth, config.RenderHeight, 24, RenderTextureFormat.ARGB32);
-            Cam1RenderTexture.Create();
+            cam0.targetTexture = Cam0RenderTexture;
+            cam1.targetTexture = Cam1RenderTexture;
         }
 
         private void ReleaseRenderTextures()
@@ -692,6 +721,15 @@ namespace LaunchMonitor.Camera
                 Destroy(Cam1RenderTexture);
                 Cam1RenderTexture = null;
             }
+        }
+
+        private void ClearTexture(RenderTexture rt, Color color)
+        {
+            if (rt == null) return;
+            var prev = RenderTexture.active;
+            RenderTexture.active = rt;
+            GL.Clear(true, true, color);
+            RenderTexture.active = prev;
         }
 
         public void RenderBothCameras()
@@ -719,7 +757,19 @@ namespace LaunchMonitor.Camera
             cam1.targetTexture = Cam1RenderTexture;
             cam0.rect = new Rect(0, 0, 1, 1);
             cam1.rect = new Rect(0, 0, 1, 1);
+            
+            // DIAGNOSTIC: Clear to Magenta to see if we are even reading the right texture
+            ClearTexture(Cam0RenderTexture, Color.magenta);
+            ClearTexture(Cam1RenderTexture, Color.magenta);
 
+            // DIAGNOSTIC: Log all cameras
+            foreach (var c in UnityEngine.Camera.allCameras)
+            {
+                Debug.Log($"[StereoRig] SceneCamera: {c.name}, depth={c.depth}, target={c.targetTexture?.name ?? "null"}, enabled={c.enabled}");
+            }
+
+            Debug.Log($"[StereoRig] Rendering: Cam0 BG={cam0.backgroundColor}, Clear={cam0.clearFlags}, Clipping={cam0.nearClipPlane}-{cam0.farClipPlane}, Mask={cam0.cullingMask}");
+            
             cam0.Render();
             cam1.Render();
 

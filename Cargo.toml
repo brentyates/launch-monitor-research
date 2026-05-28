@@ -1,0 +1,25 @@
+[package]
+name = "launch_monitor_research"
+version = "0.1.0"
+edition = "2021"
+description = "Launch monitor research - computer vision algorithms for golf ball tracking and spin detection"
+
+[lib]
+name = "launch_monitor_research"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lm-test"
+path = "src/main.rs"
+
+[dependencies]
+nalgebra = "0.33"
+image = "0.25"
+imageproc = "0.25"
+thiserror = "2.0"
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+memmap2 = "0.9"

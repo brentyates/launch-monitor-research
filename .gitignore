@@ -5,3 +5,8 @@
 *.local.json
 *.local.md
 *.blend1
+
+# Runtime / debug artifacts
+/LaunchMonitorSharedMemory
+/e2e.log
+/*.png

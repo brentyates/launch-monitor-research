@@ -21,7 +21,8 @@ namespace LaunchMonitor.Transport
     {
         None = 0,
         Launch = 1,
-        Reset = 2
+        Reset = 2,
+        Calibrate = 3
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
@@ -76,9 +77,18 @@ namespace LaunchMonitor.Transport
     {
         public static SharedMemoryWriter Instance { get; private set; }
 
-        private const string SHARED_MEMORY_PATH = "/tmp/LaunchMonitorSharedMemory";
+        private static string _sharedMemoryPath;
+        private static string SHARED_MEMORY_PATH
+        {
+            get
+            {
+                if (_sharedMemoryPath == null)
+                    _sharedMemoryPath = GetSharedMemoryPath();
+                return _sharedMemoryPath;
+            }
+        }
         private const uint MAGIC = 0x474F4C46;
-        private const int RING_BUFFER_SIZE = 12;
+        private const int RING_BUFFER_SIZE = 60;
         private const int HEADER_SIZE = 104;
 
         [Header("State")]
@@ -142,6 +152,16 @@ namespace LaunchMonitor.Transport
         private bool loggedFirstPoll;
         private int pollDebugCount;
 
+        private const int OFFSET_MAGIC = 0;
+        private const int OFFSET_STATE = 4;
+        private const int OFFSET_WRITE_HEAD = 8;
+        private const int OFFSET_FRAME_COUNT = 12;
+        private const int OFFSET_WIDTH = 16;
+        private const int OFFSET_HEIGHT = 20;
+        private const int OFFSET_FPS = 24;
+        private const int OFFSET_GROUND_TRUTH = 28;
+        private const int OFFSET_RUST_COMMAND = 48;
+
         private void PollCommands()
         {
             if (!IsConnected) return;
@@ -152,30 +172,36 @@ namespace LaunchMonitor.Transport
                 loggedFirstPoll = true;
             }
 
-            var header = ReadHeader();
+            // Read just the command part first to check
+            LaunchCommand cmd;
+            accessor.Read(OFFSET_RUST_COMMAND, out cmd);
 
             pollDebugCount++;
             if (pollDebugCount <= 300)
             {
-                Debug.Log($"Poll #{pollDebugCount}: rustCmd.command={header.rustCommand.command}, rustCmd.speed={header.rustCommand.speedMph}, magic=0x{header.magic:X8}");
+                Debug.Log($"Poll #{pollDebugCount}: rustCmd.command={cmd.command}, rustCmd.speed={cmd.speedMph}");
             }
 
-            if (header.rustCommand.command != (int)RustCommand.None)
+            if (cmd.command != (int)RustCommand.None)
             {
-                Debug.Log($"Received command from Rust: cmd={header.rustCommand.command}, speed={header.rustCommand.speedMph}");
-                var cmd = header.rustCommand;
-
-                header.rustCommand.command = (int)RustCommand.None;
-                WriteHeader(header);
+                Debug.Log($"Received command from Rust: cmd={cmd.command}, speed={cmd.speedMph}");
 
                 if (OnLaunchCommand != null)
                 {
+                    // Clear the command in shared memory immediately
+                    var clearCmd = cmd; // Copy to keep data but clear command ID
+                    clearCmd.command = (int)RustCommand.None;
+                    
+                    // Write ONLY the command struct back
+                    accessor.Write(OFFSET_RUST_COMMAND, ref clearCmd);
+                    accessor.Flush();
+
                     Debug.Log("Invoking OnLaunchCommand event");
                     OnLaunchCommand.Invoke(cmd);
                 }
                 else
                 {
-                    Debug.LogWarning("OnLaunchCommand event has no subscribers!");
+                    Debug.LogWarning("OnLaunchCommand event has no subscribers, keeping command in buffer");
                 }
             }
         }
@@ -205,6 +231,7 @@ namespace LaunchMonitor.Transport
                     false);
                 accessor = mmf.CreateViewAccessor();
 
+                // Initial full write is okay since we just created the file
                 WriteHeader(new SharedHeader
                 {
                     magic = MAGIC,
@@ -257,12 +284,10 @@ namespace LaunchMonitor.Transport
         {
             if (!IsConnected) return;
 
-            var header = ReadHeader();
-            header.state = (int)SharedMemoryState.Ready;
-            header.writeHead = 0;
-            header.frameCount = expectedFrameCount;
-            header.fps = TimeController.Instance?.TargetFps ?? 240f;
-            header.groundTruth = new GroundTruthData
+            int state = (int)SharedMemoryState.Ready;
+            int writeHead = 0;
+            float fps = TimeController.Instance?.TargetFps ?? 240f;
+            var gt = new GroundTruthData
             {
                 speedMph = launchParams.speedMph,
                 vlaDeg = launchParams.vlaDeg,
@@ -271,7 +296,14 @@ namespace LaunchMonitor.Transport
                 spinAxisDeg = launchParams.spinAxisDeg
             };
 
-            WriteHeader(header);
+            // Write specific fields
+            accessor.Write(OFFSET_STATE, ref state);
+            accessor.Write(OFFSET_WRITE_HEAD, ref writeHead);
+            accessor.Write(OFFSET_FRAME_COUNT, ref expectedFrameCount);
+            accessor.Write(OFFSET_FPS, ref fps);
+            accessor.Write(OFFSET_GROUND_TRUTH, ref gt);
+            accessor.Flush();
+            
             CurrentState = SharedMemoryState.Ready;
         }
 
@@ -279,9 +311,10 @@ namespace LaunchMonitor.Transport
         {
             if (!IsConnected) return;
 
-            var header = ReadHeader();
-            header.state = (int)SharedMemoryState.Streaming;
-            WriteHeader(header);
+            int state = (int)SharedMemoryState.Streaming;
+            accessor.Write(OFFSET_STATE, ref state);
+            accessor.Flush();
+            
             CurrentState = SharedMemoryState.Streaming;
         }
 
@@ -289,10 +322,11 @@ namespace LaunchMonitor.Transport
         {
             if (!IsConnected) return;
 
-            var header = ReadHeader();
-            header.state = (int)SharedMemoryState.Complete;
-            header.frameCount = finalFrameCount;
-            WriteHeader(header);
+            int state = (int)SharedMemoryState.Complete;
+            accessor.Write(OFFSET_STATE, ref state);
+            accessor.Write(OFFSET_FRAME_COUNT, ref finalFrameCount);
+            accessor.Flush();
+            
             CurrentState = SharedMemoryState.Complete;
         }
 
@@ -300,10 +334,12 @@ namespace LaunchMonitor.Transport
         {
             if (!IsConnected) return;
 
-            var header = ReadHeader();
-            header.state = (int)SharedMemoryState.Idle;
-            header.writeHead = 0;
-            WriteHeader(header);
+            int state = (int)SharedMemoryState.Idle;
+            int writeHead = 0;
+            accessor.Write(OFFSET_STATE, ref state);
+            accessor.Write(OFFSET_WRITE_HEAD, ref writeHead);
+            accessor.Flush();
+            
             CurrentState = SharedMemoryState.Idle;
         }
 
@@ -311,8 +347,7 @@ namespace LaunchMonitor.Transport
         {
             if (!IsConnected) return;
 
-            var header = ReadHeader();
-            header.groundTruth = new GroundTruthData
+            var gt = new GroundTruthData
             {
                 speedMph = launchParams.speedMph,
                 vlaDeg = launchParams.vlaDeg,
@@ -320,7 +355,8 @@ namespace LaunchMonitor.Transport
                 spinRpm = launchParams.spinRpm,
                 spinAxisDeg = launchParams.spinAxisDeg
             };
-            WriteHeader(header);
+            accessor.Write(OFFSET_GROUND_TRUTH, ref gt);
+            accessor.Flush();
         }
 
         public void WriteFrame(CapturedFrame frame)
@@ -352,9 +388,10 @@ namespace LaunchMonitor.Transport
 
             Thread.MemoryBarrier();
 
-            var header = ReadHeader();
-            header.writeHead = frame.frameIndex + 1;
-            WriteHeader(header);
+            // Only update write head
+            int newHead = frame.frameIndex + 1;
+            accessor.Write(OFFSET_WRITE_HEAD, ref newHead);
+            accessor.Flush();
         }
 
         private SharedHeader ReadHeader()
@@ -374,6 +411,15 @@ namespace LaunchMonitor.Transport
         {
             if (!IsConnected) return -1;
             return 0;
+        }
+
+        private static string GetSharedMemoryPath()
+        {
+            string dataPath = Application.dataPath;
+            string projectRoot = Path.GetFullPath(Path.Combine(dataPath, "..", "..", "..", ".."));
+            string path = Path.Combine(projectRoot, "LaunchMonitorSharedMemory");
+            Debug.Log($"SharedMemory path: {path}");
+            return path;
         }
     }
 }

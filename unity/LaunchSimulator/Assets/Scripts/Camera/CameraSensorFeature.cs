@@ -43,8 +43,10 @@ namespace LaunchMonitor.Camera
 
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
-            if (!DistortionEnabled && !NoiseEnabled && !GrayscaleEnabled) return;
+            if (!DistortionEnabled && !NoiseEnabled && !GrayscaleEnabled && !ExposureSimEnabled) return;
             if (renderingData.cameraData.cameraType != CameraType.Game) return;
+
+            Debug.Log($"[CameraSensorFeature] Adding pass for {renderingData.cameraData.camera.name}, distortion={DistortionEnabled}, grayscale={GrayscaleEnabled}");
 
             if (settings.sensorMaterial == null)
             {
@@ -101,7 +103,11 @@ namespace LaunchMonitor.Camera
 
             public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
             {
-                if (settings.sensorMaterial == null) return;
+                if (settings.sensorMaterial == null)
+                {
+                    Debug.LogWarning("[CameraSensorFeature] Sensor material is null, skipping pass");
+                    return;
+                }
 
                 var resourceData = frameData.Get<UniversalResourceData>();
 

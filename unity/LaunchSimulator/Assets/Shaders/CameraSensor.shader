@@ -96,8 +96,8 @@ Shader "Hidden/CameraSensor"
                     // Reference: 1ms exposure at brightness 1.0 = properly exposed
                     float referenceExposure = 1.0;
 
-                    // Signal level based on scene brightness and exposure time
-                    float signalLevel = _SceneBrightness * (_ExposureMs / referenceExposure);
+                    // Signal level based on scene brightness (which already includes exposure integration)
+                    float signalLevel = _SceneBrightness;
 
                     // Clamp to avoid division by zero
                     signalLevel = max(signalLevel, 0.001);
@@ -140,10 +140,10 @@ Shader "Hidden/CameraSensor"
                 if (_GrayscaleEnabled > 0.5)
                 {
                     float luminance = dot(col.rgb, float3(0.299, 0.587, 0.114));
-                    luminance = saturate((luminance - 0.5) * _Contrast + 0.5);
                     col.rgb = luminance;
                 }
 
+                col.rgb *= _Contrast;
                 return col;
             }
             ENDHLSL

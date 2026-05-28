@@ -32,6 +32,7 @@ namespace LaunchMonitor.Core
         private Material boardMaterial;
         private Texture2D boardTexture;
         private bool isVisible;
+        private GolfBall cachedBall;
 
         public int SquaresX => innerCornersX + 1;
         public int SquaresY => innerCornersY + 1;
@@ -46,6 +47,7 @@ namespace LaunchMonitor.Core
 
         void Start()
         {
+            cachedBall = FindFirstObjectByType<GolfBall>();
             CreateBoard();
             SetVisible(startVisible);
         }
@@ -56,9 +58,13 @@ namespace LaunchMonitor.Core
             if (meshRenderer != null)
                 meshRenderer.enabled = visible;
 
-            var ball = FindFirstObjectByType<GolfBall>();
-            if (ball != null)
-                ball.gameObject.SetActive(!visible);
+            if (cachedBall == null)
+            {
+                cachedBall = FindFirstObjectByType<GolfBall>();
+            }
+
+            if (cachedBall != null)
+                cachedBall.gameObject.SetActive(!visible);
         }
 
         public void Toggle()
@@ -88,6 +94,7 @@ namespace LaunchMonitor.Core
             CreateTexture();
             ApplyMaterial();
             UpdatePosition();
+            Debug.Log($"[CalibrationBoard] Created at {transform.position}, rotation {transform.rotation.eulerAngles}, scale {transform.localScale}");
         }
 
         private void CreateMesh()
@@ -162,8 +169,28 @@ namespace LaunchMonitor.Core
 
         private void ApplyMaterial()
         {
-            boardMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
+            // "UI/Default" is the safest bet for an unlit shader that is always included in the build.
+            // It ignores lighting and displays the texture colors directly.
+            var shaderName = "UI/Default"; 
+            var shader = Shader.Find(shaderName);
+            
+            if (shader == null)
+            {
+                Debug.LogError($"[CalibrationBoard] Shader '{shaderName}' not found! Trying 'Sprites/Default'.");
+                shaderName = "Sprites/Default";
+                shader = Shader.Find(shaderName);
+            }
+
+            if (shader == null)
+            {
+                 Debug.LogError("[CalibrationBoard] CRITICAL: No suitable shader found for calibration board!");
+                 return;
+            }
+
+            Debug.Log($"[CalibrationBoard] Creating material with shader: {shader.name}");
+            boardMaterial = new Material(shader);
             boardMaterial.mainTexture = boardTexture;
+            boardMaterial.color = Color.white; // Ensure tint is white
             meshRenderer.material = boardMaterial;
         }
 
