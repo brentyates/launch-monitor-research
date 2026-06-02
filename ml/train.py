@@ -50,6 +50,9 @@ def main():
         model.train()
         for x, n, rpm, axis, fps in train_loader:
             x, n, rpm, axis, fps = x.to(device), n.to(device), rpm.to(device), axis.to(device), fps.to(device)
+            x = x + 0.04 * torch.randn_like(x)
+            x = x * (0.85 + 0.3 * torch.rand(x.size(0), 1, 1, 1, device=device))
+            x = x.clamp(0.0, 1.0)
             prpm, paxis = model(x, n, fps)
             loss = ((prpm - rpm).abs() / rpm).mean() + 0.05 * (paxis - axis).abs().mean()
             opt.zero_grad()
@@ -61,7 +64,8 @@ def main():
             best = rmean
             torch.save(model.state_dict(), args.out)
         if epoch % 5 == 0 or epoch == args.epochs - 1:
-            print("epoch %3d  val rpm_err mean %6.2f%% median %6.2f%%  axis_err %5.2f deg" % (epoch, rmean, rmed, amean))
+            tmean, _, _ = evaluate(model, train_loader, device)
+            print("epoch %3d  train %6.2f%%  val rpm_err mean %6.2f%% median %6.2f%%  axis_err %5.2f deg" % (epoch, tmean, rmean, rmed, amean))
 
     print("best val rpm_err mean: %.2f%%  (saved %s)" % (best, args.out))
 

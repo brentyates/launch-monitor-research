@@ -82,17 +82,14 @@ def clear_scene():
 
 
 def setup_scene(scene, samples):
-    scene.render.engine = 'CYCLES'
-    scene.cycles.samples = samples
     try:
-        prefs = bpy.context.preferences.addons['cycles'].preferences
-        prefs.compute_device_type = 'METAL'
-        prefs.get_devices()
-        for d in prefs.devices:
-            d.use = True
-        scene.cycles.device = 'GPU'
+        scene.render.engine = 'BLENDER_EEVEE_NEXT'
     except Exception:
-        scene.cycles.device = 'CPU'
+        scene.render.engine = 'BLENDER_EEVEE'
+    try:
+        scene.eevee.taa_render_samples = max(samples, 8)
+    except Exception:
+        pass
     scene.view_settings.view_transform = 'Standard'
     scene.render.image_settings.file_format = 'PNG'
     scene.render.image_settings.color_mode = 'RGB'
