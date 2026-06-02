@@ -1,6 +1,6 @@
 use launch_monitor_research::{
     process_shot, BallDetector, FrameSource, GroundTruth, ProcessingResult, RenderedDatasetSource,
-    SourceConfig, StereoRig,
+    RigParams, SourceConfig, StereoRig,
 };
 use std::path::Path;
 use std::process::Command;
@@ -92,7 +92,7 @@ fn main() {
         let frames = source.read_all_frames();
         info!("Loaded {} frames for {}", frames.len(), test.name);
 
-        let rig = make_rig(&config);
+        let rig = make_rig(&config, &source.rig());
         let mut detector = BallDetector::new(15, 10);
         let debug_dir = format!("{}/debug_frames/{}", project_dir, test.name);
         let result = process_shot(&frames, &config, gt.clone(), &mut detector, &debug_dir, &rig);
@@ -168,13 +168,13 @@ fn render_case(test: &TestCase, dir: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn make_rig(config: &SourceConfig) -> StereoRig {
+fn make_rig(config: &SourceConfig, rig: &RigParams) -> StereoRig {
     StereoRig::overhead(
-        350.0,
-        3048.0,
-        1092.0,
-        6.0,
-        0.00508,
+        rig.baseline_mm,
+        rig.height_mm,
+        rig.forward_mm,
+        rig.focal_mm,
+        rig.pixel_pitch_mm,
         (config.width, config.height),
         config.fps as f64,
     )

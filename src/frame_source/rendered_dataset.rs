@@ -14,6 +14,27 @@ struct ManifestGroundTruth {
     spin_axis_deg: f64,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct RigParams {
+    pub baseline_mm: f64,
+    pub height_mm: f64,
+    pub forward_mm: f64,
+    pub focal_mm: f64,
+    pub pixel_pitch_mm: f64,
+}
+
+impl Default for RigParams {
+    fn default() -> Self {
+        Self {
+            baseline_mm: 350.0,
+            height_mm: 3048.0,
+            forward_mm: 1092.0,
+            focal_mm: 6.0,
+            pixel_pitch_mm: 0.00508,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct ManifestFrame {
     index: u32,
@@ -30,12 +51,15 @@ struct Manifest {
     height: u32,
     fps: f32,
     ground_truth: ManifestGroundTruth,
+    #[serde(default)]
+    rig: RigParams,
     frames: Vec<ManifestFrame>,
 }
 
 pub struct RenderedDatasetSource {
     config: SourceConfig,
     ground_truth: GroundTruth,
+    rig: RigParams,
     frames: Vec<StereoFrame>,
     cursor: usize,
 }
@@ -94,6 +118,7 @@ impl RenderedDatasetSource {
                 spin_rpm: manifest.ground_truth.spin_rpm,
                 spin_axis_deg: manifest.ground_truth.spin_axis_deg,
             },
+            rig: manifest.rig,
             frames,
             cursor: 0,
         })
@@ -101,6 +126,10 @@ impl RenderedDatasetSource {
 
     pub fn read_all_frames(&self) -> Vec<StereoFrame> {
         self.frames.clone()
+    }
+
+    pub fn rig(&self) -> RigParams {
+        self.rig
     }
 }
 

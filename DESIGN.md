@@ -106,3 +106,17 @@ This matters: a clean pinhole render gives the **geometric ceiling** for a confi
 1. **Document the goal** (this file). ✅
 2. **Config-driven sweep** — make rig params data; build the sweep + accuracy aggregation. Answers the geometric trade-offs.
 3. **Sensor realism** — noise, motion blur, rolling shutter, bit depth — so "cheap vs expensive" actually diverges and the cost frontier becomes real.
+4. **Machine learning** (later — not yet, but a major intended direction).
+
+## Machine learning opportunities (future)
+
+The renderer is, in effect, a **perfect-label synthetic-data factory**: every rendered frame comes with exact ground truth (3D ball position/velocity, spin rate/axis, launch params, camera pose). That makes this project unusually well-suited to ML, and ML is a strong lever on the core goal — *learned models can make cheaper, noisier hardware viable*, pushing the cost frontier down further than classical CV alone. Candidate problems, roughly easiest → most ambitious:
+
+- **Learned ball detection / sub-pixel centroid** — a small CNN detector to replace peak+centroid, robust to noise, motion blur, low contrast, and partial clipping (where the classical detector is weakest).
+- **Spin estimation** — the current exhaustive chevron search is brittle and slow (273K hypotheses, 8–154% error). A learned model regressing spin rate + axis from the frame sequence is a natural, high-value replacement.
+- **Denoise / deblur / rolling-shutter correction** — learned preprocessing that recovers usable frames from cheap sensors, directly expanding the set of viable hardware.
+- **Super-resolution** — recover ball detail from low-resolution cheap cameras.
+- **End-to-end regression** — map raw stereo frame sequences directly to launch parameters, skipping explicit triangulation, as an accuracy ceiling reference.
+- **Config surrogate / optimizer** — a model that predicts accuracy from a hardware config, so the design-space search becomes Bayesian optimization over a fast surrogate instead of brute-force rendering every point.
+
+The throughline: domain-randomized synthetic training data (varying lighting, noise, textures, geometry) with sim-to-real transfer as the eventual bridge to physical hardware. Sensor realism (Phase 3) is a prerequisite for any of this to transfer.

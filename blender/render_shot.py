@@ -87,6 +87,11 @@ def parse_args():
     p.add_argument("--fps", type=float, required=True)
     p.add_argument("--frames", type=int, required=True)
     p.add_argument("--samples", type=int, required=True)
+    p.add_argument("--baseline-mm", type=float, default=BASELINE_MM)
+    p.add_argument("--mount-height-mm", type=float, default=HEIGHT_MM)
+    p.add_argument("--forward-mm", type=float, default=FORWARD_MM)
+    p.add_argument("--focal-mm", type=float, default=FOCAL_MM)
+    p.add_argument("--pixel-pitch-mm", type=float, default=PIXEL_PITCH_MM)
     return p.parse_args(argv)
 
 
@@ -198,6 +203,13 @@ def main():
     try:
         args = parse_args()
 
+        global FOCAL_MM, PIXEL_PITCH_MM, BASELINE_MM, HEIGHT_MM, FORWARD_MM
+        FOCAL_MM = args.focal_mm
+        PIXEL_PITCH_MM = args.pixel_pitch_mm
+        BASELINE_MM = args.baseline_mm
+        HEIGHT_MM = args.mount_height_mm
+        FORWARD_MM = args.forward_mm
+
         os.makedirs(args.out, exist_ok=True)
 
         scene = bpy.context.scene
@@ -290,6 +302,13 @@ def main():
                 "hla_deg": args.hla,
                 "spin_rpm": args.spin,
                 "spin_axis_deg": args.axis,
+            },
+            "rig": {
+                "baseline_mm": BASELINE_MM,
+                "height_mm": HEIGHT_MM,
+                "forward_mm": FORWARD_MM,
+                "focal_mm": FOCAL_MM,
+                "pixel_pitch_mm": PIXEL_PITCH_MM,
             },
             "frames": manifest_frames,
         }
