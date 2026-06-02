@@ -28,6 +28,8 @@ struct RigConfig {
     height: u32,
     fps: f64,
     samples: u32,
+    #[serde(default)]
+    exposure_us: f64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,7 +72,7 @@ fn main() {
     );
 
     let mut csv = String::from(
-        "config,fps,width,height,focal_mm,baseline_mm,mount_height_mm,cost_usd,shot,frames,detected,speed_err_pct,vla_err_deg,hla_err_deg\n",
+        "config,fps,exposure_us,width,height,focal_mm,baseline_mm,mount_height_mm,cost_usd,shot,frames,detected,speed_err_pct,vla_err_deg,hla_err_deg\n",
     );
     let mut summary: Vec<(String, f64, f64, f64, f64, u32, &'static str)> = Vec::new();
 
@@ -94,10 +96,10 @@ fn main() {
                 r.shot, r.frames, r.detected, r.speed_err_pct, r.vla_err_deg, r.hla_err_deg
             );
             csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{:.0},{},{},{},{:.3},{:.3},{:.3}\n",
-                cfg.name, cfg.fps, cfg.width, cfg.height, cfg.focal_mm, cfg.baseline_mm,
-                cfg.height_mm, cost, r.shot, r.frames, r.detected, r.speed_err_pct,
-                r.vla_err_deg, r.hla_err_deg
+                "{},{},{},{},{},{},{},{},{:.0},{},{},{},{:.3},{:.3},{:.3}\n",
+                cfg.name, cfg.fps, cfg.exposure_us, cfg.width, cfg.height, cfg.focal_mm,
+                cfg.baseline_mm, cfg.height_mm, cost, r.shot, r.frames, r.detected,
+                r.speed_err_pct, r.vla_err_deg, r.hla_err_deg
             ));
 
             if !r.detected {
@@ -249,6 +251,7 @@ fn render(project_dir: &str, cfg: &RigConfig, shot: &Shot, dir: &str) -> std::io
             "--forward-mm", &cfg.forward_mm.to_string(),
             "--focal-mm", &cfg.focal_mm.to_string(),
             "--pixel-pitch-mm", &cfg.pixel_pitch_mm.to_string(),
+            "--exposure-us", &cfg.exposure_us.to_string(),
         ])
         .status()?;
 

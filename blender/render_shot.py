@@ -92,6 +92,8 @@ def parse_args():
     p.add_argument("--forward-mm", type=float, default=FORWARD_MM)
     p.add_argument("--focal-mm", type=float, default=FOCAL_MM)
     p.add_argument("--pixel-pitch-mm", type=float, default=PIXEL_PITCH_MM)
+    p.add_argument("--exposure-us", type=float, default=0.0,
+                   help="exposure time in microseconds; 0 = no motion blur (instantaneous)")
     return p.parse_args(argv)
 
 
@@ -199,6 +201,22 @@ def make_lights(scene):
         bg.inputs["Color"].default_value = (0.002, 0.002, 0.002, 1.0)
 
 
+def action_fcurves(obj):
+    ad = obj.animation_data
+    if not ad or not ad.action:
+        return []
+    act = ad.action
+    fcs = getattr(act, "fcurves", None)
+    if fcs:
+        return list(fcs)
+    out = []
+    for layer in getattr(act, "layers", []):
+        for strip in getattr(layer, "strips", []):
+            for cb in getattr(strip, "channelbags", []):
+                out.extend(list(cb.fcurves))
+    return out
+
+
 def main():
     try:
         args = parse_args()
@@ -225,6 +243,18 @@ def main():
         ball_root = load_ball(scene)
         make_turf(scene)
         make_lights(scene)
+
+        exposure_fraction = 0.0
+        if args.exposure_us > 0.0:
+            exposure_fraction = min(args.exposure_us * 1.0e-6 * args.fps, 1.0)
+            scene.render.use_motion_blur = True
+            scene.render.motion_blur_shutter = exposure_fraction
+            try:
+                scene.render.motion_blur_position = 'CENTER'
+            except Exception:
+                pass
+        else:
+            scene.render.use_motion_blur = False
 
         speed_mm_s = args.speed * MPH_TO_MM_S
         vla = math.radians(args.vla)
@@ -270,13 +300,26 @@ def main():
             if i > 100000:
                 break
 
-        manifest_frames = []
-        for index, (_, pos_mm) in enumerate(emitted):
-            t = index / args.fps
-            phys_t = emitted[index][0] / args.fps
+        ball_root.rotation_mode = 'QUATERNION'
+        for index, (orig_i, pos_mm) in enumerate(emitted):
+            phys_t = orig_i / args.fps
             ball_root.location = (pos_mm[0] / 1000.0, pos_mm[1] / 1000.0, pos_mm[2] / 1000.0)
             ball_root.rotation_quaternion = Quaternion(spin_axis, omega * phys_t)
+            ball_root.keyframe_insert(data_path="location", frame=index)
+            ball_root.keyframe_insert(data_path="rotation_quaternion", frame=index)
 
+        for fc in action_fcurves(ball_root):
+            fc.extrapolation = 'LINEAR'
+            for kp in fc.keyframe_points:
+                kp.interpolation = 'LINEAR'
+
+        scene.frame_start = 0
+        scene.frame_end = max(0, len(emitted) - 1)
+
+        manifest_frames = []
+        for index, (_, pos_mm) in enumerate(emitted):
+            scene.frame_set(index)
+            t = index / args.fps
             entry = {
                 "index": index,
                 "timestamp": t,
@@ -309,6 +352,11 @@ def main():
                 "forward_mm": FORWARD_MM,
                 "focal_mm": FOCAL_MM,
                 "pixel_pitch_mm": PIXEL_PITCH_MM,
+            },
+            "sensor": {
+                "shutter_type": "global",
+                "exposure_us": args.exposure_us,
+                "motion_blur_shutter": exposure_fraction,
             },
             "frames": manifest_frames,
         }

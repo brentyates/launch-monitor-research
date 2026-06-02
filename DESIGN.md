@@ -43,8 +43,10 @@ A spec only "passes" if it meets the budget across this whole range (the fast/lo
 **Camera / sensor** — the dominant cost driver:
 - **Frame rate** — {120, 240, 480, 960} fps. More frames in the field of view = better velocity/spin fits, but fps is the single biggest cost and availability constraint.
 - **Resolution** — {1456×1088, 728×544, 512×384, 320×240}. Higher res → larger ball in pixels → better detection/triangulation precision, but lowers max fps and raises cost/bandwidth.
-- **Shutter** — global vs rolling. Cheap cameras are rolling-shutter, which skews fast-moving objects.
+- **Exposure time** — sets motion blur. A cheap camera that can't expose short enough (without enough light) smears the fast ball; this is the knob an IR strobe exists to win.
 - **Bit depth** — 8 vs 10/12. Affects faint-feature contrast (chevrons for spin).
+
+**Global shutter is a fixed assumption, not a variable.** Rolling shutter skews a ~74 m/s ball badly, so any viable build uses a global-shutter sensor; the study only considers global-shutter cameras.
 
 **Optics:**
 - **Focal length** — {4, 6, 8, 12} mm. Trades field-of-view coverage against ball pixel size.
@@ -102,7 +104,7 @@ Honest accounting, because it bounds what the results mean.
 
 **Modeled today:** geometry, optics as an ideal pinhole, resolution, frame rate, basic lighting, constant-velocity trajectory, exact ground truth.
 
-**Not yet modeled (Phase 3):** sensor noise, motion blur from finite exposure, rolling shutter, bit-depth quantization, lens distortion, compression artifacts.
+**Not yet modeled (Phase 3):** sensor noise, motion blur from finite exposure, bit-depth quantization, lens distortion, compression artifacts. (Rolling shutter is intentionally out of scope — global shutter only.)
 
 This matters: a clean pinhole render gives the **geometric ceiling** for a configuration. It cannot yet distinguish a $60 noisy rolling-shutter camera from a $2000 global-shutter one at the same fps/resolution. Modeling the sensor degradations is what turns "this geometry could work" into "this *hardware* will work," and is required before any cost claim is trustworthy.
 
@@ -110,7 +112,7 @@ This matters: a clean pinhole render gives the **geometric ceiling** for a confi
 
 1. **Document the goal** (this file). ✅
 2. **Config-driven sweep** — make rig params data; build the sweep + accuracy aggregation. Answers the geometric trade-offs.
-3. **Sensor realism** — noise, motion blur, rolling shutter, bit depth — so "cheap vs expensive" actually diverges and the cost frontier becomes real.
+3. **Sensor realism** — motion blur (finite exposure), sensor noise, bit depth — so "cheap vs expensive" actually diverges and the cost frontier becomes real. (Global shutter only; rolling shutter is out of scope.)
 4. **Machine learning** (later — not yet, but a major intended direction).
 
 ## Machine learning opportunities (future)
