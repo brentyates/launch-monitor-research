@@ -1,4 +1,57 @@
 use nalgebra::{Matrix3, Vector3};
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CameraDef {
+    pub id: String,
+    pub role: String,
+    pub position_mm: [f64; 3],
+    pub aim_mm: [f64; 3],
+    pub focal_mm: f64,
+    pub pixel_pitch_mm: f64,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Camera {
+    pub id: String,
+    pub role: String,
+    pub intrinsic: Matrix3<f64>,
+    pub rotation: Matrix3<f64>,
+    pub translation: Vector3<f64>,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Camera {
+    pub fn from_def(def: &CameraDef) -> Camera {
+        let focal_px = def.focal_mm / def.pixel_pitch_mm;
+        let cx = def.width as f64 / 2.0;
+        let cy = def.height as f64 / 2.0;
+
+        let intrinsic = Matrix3::new(
+            focal_px, 0.0, cx,
+            0.0, focal_px, cy,
+            0.0, 0.0, 1.0,
+        );
+
+        let position = Vector3::new(def.position_mm[0], def.position_mm[1], def.position_mm[2]);
+        let aim = Vector3::new(def.aim_mm[0], def.aim_mm[1], def.aim_mm[2]);
+        let rotation = StereoRig::look_at(&position, &aim);
+        let translation = -(rotation * position);
+
+        Camera {
+            id: def.id.clone(),
+            role: def.role.clone(),
+            intrinsic,
+            rotation,
+            translation,
+            width: def.width,
+            height: def.height,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct StereoRig {
@@ -111,9 +164,13 @@ impl StereoRig {
         Vector3::new(0.0, convergence_y_mm, 0.0)
     }
 
-    fn look_at(eye: &Vector3<f64>, target: &Vector3<f64>) -> Matrix3<f64> {
+    pub(crate) fn look_at(eye: &Vector3<f64>, target: &Vector3<f64>) -> Matrix3<f64> {
         let forward = (target - eye).normalize();
-        let world_up = Vector3::new(0.0, 0.0, 1.0);
+        let world_up = if forward.z.abs() > 0.999 {
+            Vector3::new(0.0, 1.0, 0.0)
+        } else {
+            Vector3::new(0.0, 0.0, 1.0)
+        };
         let right = world_up.cross(&forward).normalize();
         let down = right.cross(&forward);
 

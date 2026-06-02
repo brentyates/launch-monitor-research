@@ -1,6 +1,8 @@
 mod rendered_dataset;
+mod rig_dataset;
 
 pub use rendered_dataset::{RenderedDatasetSource, RigParams};
+pub use rig_dataset::{load as load_rig_dataset, RigDataset, RigFrame};
 
 use image::GrayImage;
 

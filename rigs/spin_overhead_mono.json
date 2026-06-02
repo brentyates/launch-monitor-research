@@ -1,0 +1,29 @@
+{
+  "name": "spin_overhead_mono",
+  "measures": [
+    "spin"
+  ],
+  "fps": 480.0,
+  "strobe_us": 20.0,
+  "samples": 32,
+  "cameras": [
+    {
+      "id": "spin0",
+      "role": "spin",
+      "position_mm": [
+        0.0,
+        1092.0,
+        3048.0
+      ],
+      "aim_mm": [
+        0.0,
+        437.116,
+        0.0
+      ],
+      "focal_mm": 18.0,
+      "pixel_pitch_mm": 0.00508,
+      "width": 512,
+      "height": 384
+    }
+  ]
+}

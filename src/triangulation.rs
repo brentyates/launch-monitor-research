@@ -1,5 +1,5 @@
 use crate::ball_detector::BallDetection;
-use crate::config::StereoRig;
+use crate::config::{Camera, StereoRig};
 use nalgebra::{Matrix3, Matrix4, Vector3, Vector4};
 use thiserror::Error;
 
@@ -29,7 +29,9 @@ pub struct LaunchData {
 pub struct StereoTriangulator {
     proj_cam0: [[f64; 4]; 3],
     proj_cam1: [[f64; 4]; 3],
-    rig: StereoRig,
+    rig: Option<StereoRig>,
+    cam0_size: (u32, u32),
+    cam1_size: (u32, u32),
 }
 
 impl StereoTriangulator {
@@ -53,7 +55,25 @@ impl StereoTriangulator {
     pub fn new(rig: &StereoRig) -> Self {
         let proj_cam0 = Self::build_projection(&rig.cam0_intrinsic, &rig.cam0_rotation, &rig.cam0_translation);
         let proj_cam1 = Self::build_projection(&rig.cam1_intrinsic, &rig.cam1_rotation, &rig.cam1_translation);
-        Self { proj_cam0, proj_cam1, rig: rig.clone() }
+        Self {
+            proj_cam0,
+            proj_cam1,
+            cam0_size: (rig.width, rig.height),
+            cam1_size: (rig.width, rig.height),
+            rig: Some(rig.clone()),
+        }
+    }
+
+    pub fn from_pair(a: &Camera, b: &Camera) -> Self {
+        let proj_cam0 = Self::build_projection(&a.intrinsic, &a.rotation, &a.translation);
+        let proj_cam1 = Self::build_projection(&b.intrinsic, &b.rotation, &b.translation);
+        Self {
+            proj_cam0,
+            proj_cam1,
+            cam0_size: (a.width, a.height),
+            cam1_size: (b.width, b.height),
+            rig: None,
+        }
     }
 
     fn build_projection(k: &Matrix3<f64>, r: &Matrix3<f64>, t: &Vector3<f64>) -> [[f64; 4]; 3] {
@@ -72,18 +92,24 @@ impl StereoTriangulator {
     }
 
     pub fn triangulate(&self, cam0: &BallDetection, cam1: &BallDetection) -> Result<Point3D, TriangulationError> {
-        let (u1, v1) = {
-            let n_u = cam0.center_x / self.rig.width as f64;
-            let n_v = cam0.center_y / self.rig.height as f64;
-            let (un_u, un_v) = self.rig.undistort_pixel(0, n_u, n_v);
-            (un_u * self.rig.width as f64, un_v * self.rig.height as f64)
+        let (u1, v1) = match &self.rig {
+            Some(rig) => {
+                let n_u = cam0.center_x / self.cam0_size.0 as f64;
+                let n_v = cam0.center_y / self.cam0_size.1 as f64;
+                let (un_u, un_v) = rig.undistort_pixel(0, n_u, n_v);
+                (un_u * self.cam0_size.0 as f64, un_v * self.cam0_size.1 as f64)
+            }
+            None => (cam0.center_x, cam0.center_y),
         };
 
-        let (u2, v2) = {
-            let n_u = cam1.center_x / self.rig.width as f64;
-            let n_v = cam1.center_y / self.rig.height as f64;
-            let (un_u, un_v) = self.rig.undistort_pixel(1, n_u, n_v);
-            (un_u * self.rig.width as f64, un_v * self.rig.height as f64)
+        let (u2, v2) = match &self.rig {
+            Some(rig) => {
+                let n_u = cam1.center_x / self.cam1_size.0 as f64;
+                let n_v = cam1.center_y / self.cam1_size.1 as f64;
+                let (un_u, un_v) = rig.undistort_pixel(1, n_u, n_v);
+                (un_u * self.cam1_size.0 as f64, un_v * self.cam1_size.1 as f64)
+            }
+            None => (cam1.center_x, cam1.center_y),
         };
 
         let p1 = &self.proj_cam0;

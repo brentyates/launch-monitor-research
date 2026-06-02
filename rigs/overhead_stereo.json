@@ -1,0 +1,47 @@
+{
+  "name": "overhead_stereo",
+  "measures": [
+    "position"
+  ],
+  "fps": 240.0,
+  "strobe_us": 50.0,
+  "samples": 32,
+  "cameras": [
+    {
+      "id": "left",
+      "role": "position",
+      "position_mm": [
+        -175.0,
+        1092.0,
+        3048.0
+      ],
+      "aim_mm": [
+        0.0,
+        437.116,
+        0.0
+      ],
+      "focal_mm": 6.0,
+      "pixel_pitch_mm": 0.00508,
+      "width": 512,
+      "height": 384
+    },
+    {
+      "id": "right",
+      "role": "position",
+      "position_mm": [
+        175.0,
+        1092.0,
+        3048.0
+      ],
+      "aim_mm": [
+        0.0,
+        437.116,
+        0.0
+      ],
+      "focal_mm": 6.0,
+      "pixel_pitch_mm": 0.00508,
+      "width": 512,
+      "height": 384
+    }
+  ]
+}

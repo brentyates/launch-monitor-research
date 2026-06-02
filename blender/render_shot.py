@@ -38,9 +38,9 @@ def compute_convergence(render_h):
 
 
 def look_at_rows(eye, target):
-    # Ported verbatim from src/config.rs StereoRig::look_at (world_up = +Z)
+    # Ported verbatim from src/config.rs StereoRig::look_at (world_up = +Z, alt up when near-vertical)
     fwd = (target - eye).normalized()
-    world_up = Vector((0.0, 0.0, 1.0))
+    world_up = Vector((0.0, 1.0, 0.0)) if abs(fwd.z) > 0.999 else Vector((0.0, 0.0, 1.0))
     right = world_up.cross(fwd).normalized()
     down = right.cross(fwd)
     return right, down, fwd
@@ -72,6 +72,20 @@ def project_cv(pos_mm, eye_mm, target_mm, width, height):
     return (u, v)
 
 
+def project_cv_cam(pos_mm, cam):
+    eye_mm = cam["position_mm"]
+    target_mm = cam["aim_mm"]
+    right, down, fwd = look_at_rows(Vector(eye_mm), Vector(target_mm))
+    rel = Vector(pos_mm) - Vector(eye_mm)
+    xc = right.dot(rel); yc = down.dot(rel); zc = fwd.dot(rel)
+    if zc <= 1e-6:
+        return None
+    f_px = cam["focal_mm"] / cam["pixel_pitch_mm"]
+    u = f_px * xc / zc + cam["width"] / 2.0
+    v = f_px * yc / zc + cam["height"] / 2.0
+    return (u, v)
+
+
 def parse_args():
     argv = sys.argv[sys.argv.index("--") + 1:]
     p = argparse.ArgumentParser()
@@ -82,11 +96,12 @@ def parse_args():
     p.add_argument("--spin", type=float, required=True)
     p.add_argument("--axis", type=float, required=True)
     p.add_argument("--out", required=True)
-    p.add_argument("--width", type=int, required=True)
-    p.add_argument("--height", type=int, required=True)
-    p.add_argument("--fps", type=float, required=True)
+    p.add_argument("--rig", default=None)
+    p.add_argument("--width", type=int, default=None)
+    p.add_argument("--height", type=int, default=None)
+    p.add_argument("--fps", type=float, default=None)
     p.add_argument("--frames", type=int, required=True)
-    p.add_argument("--samples", type=int, required=True)
+    p.add_argument("--samples", type=int, default=None)
     p.add_argument("--baseline-mm", type=float, default=BASELINE_MM)
     p.add_argument("--mount-height-mm", type=float, default=HEIGHT_MM)
     p.add_argument("--forward-mm", type=float, default=FORWARD_MM)
@@ -130,6 +145,29 @@ def setup_render(scene, args):
     scene.render.pixel_aspect_y = 1.0
 
 
+def setup_render_engine(scene, samples):
+    scene.render.engine = 'CYCLES'
+    scene.cycles.samples = samples
+    try:
+        prefs = bpy.context.preferences.addons['cycles'].preferences
+        prefs.compute_device_type = 'METAL'
+        prefs.get_devices()
+        for device in prefs.devices:
+            device.use = True
+        scene.cycles.device = 'GPU'
+    except Exception:
+        scene.cycles.device = 'CPU'
+
+    scene.view_settings.view_transform = 'Standard'
+    scene.render.image_settings.file_format = 'PNG'
+    scene.render.image_settings.color_mode = 'RGB'
+    scene.render.image_settings.color_depth = '8'
+
+    scene.render.resolution_percentage = 100
+    scene.render.pixel_aspect_x = 1.0
+    scene.render.pixel_aspect_y = 1.0
+
+
 def make_camera(name, eye_mm, target_mm, width):
     cam_data = bpy.data.cameras.new(name)
     cam_data.lens = FOCAL_MM
@@ -139,6 +177,19 @@ def make_camera(name, eye_mm, target_mm, width):
     cam_data.clip_end = 1000.0
     cam_obj = bpy.data.objects.new(name, cam_data)
     cam_obj.matrix_world = cam_matrix_world(eye_mm, target_mm)
+    bpy.context.scene.collection.objects.link(cam_obj)
+    return cam_obj
+
+
+def make_camera_def(cam):
+    cam_data = bpy.data.cameras.new(cam["id"])
+    cam_data.lens = cam["focal_mm"]
+    cam_data.sensor_fit = 'HORIZONTAL'
+    cam_data.sensor_width = cam["width"] * cam["pixel_pitch_mm"]
+    cam_data.clip_start = 0.01
+    cam_data.clip_end = 1000.0
+    cam_obj = bpy.data.objects.new(cam["id"], cam_data)
+    cam_obj.matrix_world = cam_matrix_world(cam["position_mm"], cam["aim_mm"])
     bpy.context.scene.collection.objects.link(cam_obj)
     return cam_obj
 
@@ -217,9 +268,167 @@ def action_fcurves(obj):
     return out
 
 
+def run_rig(args):
+    with open(args.rig) as f:
+        rig = json.load(f)
+
+    fps = float(rig["fps"])
+    strobe_us = float(rig["strobe_us"])
+    samples = int(rig["samples"])
+    cameras = rig["cameras"]
+
+    os.makedirs(args.out, exist_ok=True)
+
+    scene = bpy.context.scene
+    clear_scene()
+    setup_render_engine(scene, samples)
+
+    cam_objs = {}
+    for cam in cameras:
+        cam_objs[cam["id"]] = make_camera_def(cam)
+
+    ball_root = load_ball(scene)
+    make_turf(scene)
+    make_lights(scene)
+
+    exposure_fraction = 0.0
+    if strobe_us > 0.0:
+        exposure_fraction = min(strobe_us * 1.0e-6 * fps, 1.0)
+        scene.render.use_motion_blur = True
+        scene.render.motion_blur_shutter = exposure_fraction
+        try:
+            scene.render.motion_blur_position = 'CENTER'
+        except Exception:
+            pass
+    else:
+        scene.render.use_motion_blur = False
+
+    speed_mm_s = args.speed * MPH_TO_MM_S
+    vla = math.radians(args.vla)
+    hla = math.radians(args.hla)
+    vplane = speed_mm_s * math.cos(vla)
+    v = (
+        vplane * math.sin(hla),
+        vplane * math.cos(hla),
+        speed_mm_s * math.sin(vla),
+    )
+    p0 = (0.0, 0.0, BALL_RADIUS_MM)
+    omega = args.spin * 2.0 * math.pi / 60.0
+    axis_rad = math.radians(args.axis)
+    spin_axis = Vector((-math.cos(axis_rad), -math.sin(axis_rad), 0.0)).normalized()
+
+    def visible(pos_mm):
+        for cam in cameras:
+            proj = project_cv_cam(pos_mm, cam)
+            if proj is None:
+                return False
+            u, w = proj
+            if not (2 <= u <= cam["width"] - 2 and 2 <= w <= cam["height"] - 2):
+                return False
+        return True
+
+    emitted = []
+    seen_visible = False
+    i = 0
+    while len(emitted) < args.frames:
+        t = i / fps
+        pos_mm = (
+            p0[0] + v[0] * t,
+            p0[1] + v[1] * t,
+            p0[2] + v[2] * t,
+        )
+        vis = visible(pos_mm)
+        if vis:
+            seen_visible = True
+            emitted.append((i, pos_mm))
+        elif seen_visible:
+            break
+        i += 1
+        if i > 100000:
+            break
+
+    ball_root.rotation_mode = 'QUATERNION'
+    for index, (orig_i, pos_mm) in enumerate(emitted):
+        phys_t = orig_i / fps
+        ball_root.location = (pos_mm[0] / 1000.0, pos_mm[1] / 1000.0, pos_mm[2] / 1000.0)
+        ball_root.rotation_quaternion = Quaternion(spin_axis, omega * phys_t)
+        ball_root.keyframe_insert(data_path="location", frame=index)
+        ball_root.keyframe_insert(data_path="rotation_quaternion", frame=index)
+
+    for fc in action_fcurves(ball_root):
+        fc.extrapolation = 'LINEAR'
+        for kp in fc.keyframe_points:
+            kp.interpolation = 'LINEAR'
+
+    scene.frame_start = 0
+    scene.frame_end = max(0, len(emitted) - 1)
+
+    manifest_frames = []
+    for index, (_, pos_mm) in enumerate(emitted):
+        scene.frame_set(index)
+        t = index / fps
+        images = {}
+        for cam in cameras:
+            cam_obj = cam_objs[cam["id"]]
+            scene.render.resolution_x = cam["width"]
+            scene.render.resolution_y = cam["height"]
+            scene.camera = cam_obj
+            fname = "frame_%04d_%s.png" % (index, cam["id"])
+            scene.render.filepath = os.path.join(args.out, fname)
+            bpy.ops.render.render(write_still=True)
+            images[cam["id"]] = fname
+        manifest_frames.append({
+            "index": index,
+            "timestamp": t,
+            "ball_pos_mm": [pos_mm[0], pos_mm[1], pos_mm[2]],
+            "ball_vel_mm_s": [v[0], v[1], v[2]],
+            "images": images,
+        })
+
+    manifest = {
+        "rig": rig["name"],
+        "measures": rig["measures"],
+        "fps": fps,
+        "ground_truth": {
+            "speed_mph": args.speed,
+            "vla_deg": args.vla,
+            "hla_deg": args.hla,
+            "spin_rpm": args.spin,
+            "spin_axis_deg": args.axis,
+        },
+        "cameras": [
+            {
+                "id": cam["id"],
+                "role": cam["role"],
+                "position_mm": list(cam["position_mm"]),
+                "aim_mm": list(cam["aim_mm"]),
+                "focal_mm": cam["focal_mm"],
+                "pixel_pitch_mm": cam["pixel_pitch_mm"],
+                "width": cam["width"],
+                "height": cam["height"],
+            }
+            for cam in cameras
+        ],
+        "sensor": {
+            "shutter_type": "global",
+            "strobe_us": strobe_us,
+            "motion_blur_shutter": exposure_fraction,
+        },
+        "frames": manifest_frames,
+    }
+    with open(os.path.join(args.out, "manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    print("render_shot: rig %s emitted %d frames to %s" % (rig["name"], len(manifest_frames), args.out))
+
+
 def main():
     try:
         args = parse_args()
+
+        if args.rig is not None:
+            run_rig(args)
+            return
 
         global FOCAL_MM, PIXEL_PITCH_MM, BASELINE_MM, HEIGHT_MM, FORWARD_MM
         FOCAL_MM = args.focal_mm
