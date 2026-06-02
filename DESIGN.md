@@ -43,10 +43,10 @@ A spec only "passes" if it meets the budget across this whole range (the fast/lo
 **Camera / sensor** — the dominant cost driver:
 - **Frame rate** — {120, 240, 480, 960} fps. More frames in the field of view = better velocity/spin fits, but fps is the single biggest cost and availability constraint.
 - **Resolution** — {1456×1088, 728×544, 512×384, 320×240}. Higher res → larger ball in pixels → better detection/triangulation precision, but lowers max fps and raises cost/bandwidth.
-- **Exposure time** — sets motion blur. A cheap camera that can't expose short enough (without enough light) smears the fast ball; this is the knob an IR strobe exists to win.
+- **Strobe duration** — the ball is always frozen by a short IR strobe; the only open question is *how short* the pulse must be. Minor for positioning, but critical for the zoomed spin camera, where the zoom magnifies any residual blur and smears the markings.
 - **Bit depth** — 8 vs 10/12. Affects faint-feature contrast (chevrons for spin).
 
-**Global shutter is a fixed assumption, not a variable.** Rolling shutter skews a ~74 m/s ball badly, so any viable build uses a global-shutter sensor; the study only considers global-shutter cameras.
+**Global shutter and short-exposure (strobe-frozen) capture are fixed assumptions, not variables.** Rolling shutter skews a ~74 m/s ball and long exposure smears it, so any viable build uses a global-shutter sensor with a mandatory short IR strobe; the study only considers that regime. Motion blur is still modeled, but only to verify a chosen strobe duration adequately freezes the ball (especially for the spin camera) — never to evaluate long exposure as a cost-saving option.
 
 **Optics:**
 - **Focal length** — {4, 6, 8, 12} mm. Trades field-of-view coverage against ball pixel size.

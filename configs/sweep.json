@@ -11,7 +11,7 @@
     { "name": "res320_240", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 320, "height": 240, "fps": 240.0, "samples": 32 },
     { "name": "res728_240", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 728, "height": 544, "fps": 240.0, "samples": 32 },
     { "name": "cheap_120_320", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 320, "height": 240, "fps": 120.0, "samples": 32 },
-    { "name": "fps240_512_strobe_1000us", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 512, "height": 384, "fps": 240.0, "samples": 32, "exposure_us": 1000.0 },
-    { "name": "fps120_512_nostrobe_4000us", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 512, "height": 384, "fps": 120.0, "samples": 32, "exposure_us": 4000.0 }
+    { "name": "fps240_512_strobe_50us", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 512, "height": 384, "fps": 240.0, "samples": 32, "exposure_us": 50.0 },
+    { "name": "fps240_512_strobe_200us", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 512, "height": 384, "fps": 240.0, "samples": 32, "exposure_us": 200.0 }
   ]
 }
