@@ -70,6 +70,7 @@ def parse_args():
     p.add_argument("--rpm-max", type=float, default=11000.0)
     p.add_argument("--samples", type=int, default=16)
     p.add_argument("--max-frames", type=int, default=12)
+    p.add_argument("--engine", default="eevee")
     return p.parse_args(argv)
 
 
@@ -81,15 +82,28 @@ def clear_scene():
             block.remove(item)
 
 
-def setup_scene(scene, samples):
-    try:
-        scene.render.engine = 'BLENDER_EEVEE_NEXT'
-    except Exception:
-        scene.render.engine = 'BLENDER_EEVEE'
-    try:
-        scene.eevee.taa_render_samples = max(samples, 8)
-    except Exception:
-        pass
+def setup_scene(scene, samples, engine):
+    if engine == "cycles":
+        scene.render.engine = 'CYCLES'
+        scene.cycles.samples = samples
+        try:
+            prefs = bpy.context.preferences.addons['cycles'].preferences
+            prefs.compute_device_type = 'METAL'
+            prefs.get_devices()
+            for d in prefs.devices:
+                d.use = True
+            scene.cycles.device = 'GPU'
+        except Exception:
+            scene.cycles.device = 'CPU'
+    else:
+        try:
+            scene.render.engine = 'BLENDER_EEVEE_NEXT'
+        except Exception:
+            scene.render.engine = 'BLENDER_EEVEE'
+        try:
+            scene.eevee.taa_render_samples = max(samples, 8)
+        except Exception:
+            pass
     scene.view_settings.view_transform = 'Standard'
     scene.render.image_settings.file_format = 'PNG'
     scene.render.image_settings.color_mode = 'RGB'
@@ -167,7 +181,7 @@ def main():
 
     scene = bpy.context.scene
     clear_scene()
-    setup_scene(scene, args.samples)
+    setup_scene(scene, args.samples, args.engine)
     cam = make_camera(scene)
     ball = load_ball(scene)
     make_turf(scene)
