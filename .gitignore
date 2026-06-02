@@ -16,3 +16,5 @@
 /ml/.venv/
 /ml/data/
 /ml/runs/
+__pycache__/
+*.pyc

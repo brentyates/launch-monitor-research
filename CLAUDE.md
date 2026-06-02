@@ -4,28 +4,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Purpose
 
-The project's goal is a **hardware feasibility & optimization study**: determine the cheapest hardware (camera fps/resolution/shutter, lens, lighting) and best placement (mount height/offset, stereo baseline/convergence) that can build a working DIY overhead golf launch monitor meeting an accuracy budget — all in simulation, without buying hardware. The CV pipeline and Blender renderer are the means to explore that design space with exact ground truth. See `DESIGN.md` for the full objective, design space, accuracy tiers, and methodology. The current harness validates one hardcoded rig; the roadmap is config-driven sweeps (Phase 2) then sensor realism (Phase 3).
+The project's goal is a **hardware feasibility & optimization study**: determine the cheapest hardware (camera fps/resolution/shutter, lens, lighting) and best placement (mount height/offset, stereo baseline/convergence) that can build a working DIY overhead golf launch monitor meeting an accuracy budget — all in simulation, without buying hardware. The CV pipeline and Blender renderer are the means to explore that design space with exact ground truth.
+
+**Operating loop (the project's working model):** current software → implied hardware requirement → judge affordability → if infeasible, improve software to relax it → repeat. The deliverable is the hardware requirement; software work is demand-driven by affordability gaps.
+
+**`DESIGN.md` is the running research log + current status — read it first.** In brief: position is solved and cheap; spin via classical CV works down to ~1800 fps (commercial range) but hits a wall at the affordable 500–800 fps, where a **learned estimator (ml/)** instead reaches ~8% rate / 0.43° axis (validated EEVEE→Cycles).
 
 ## Commands
 
 ```bash
-cargo build --release --bin lm-test    # Build release binary
-cargo check                            # Type-check without building
-cargo test                             # Run unit tests
+cargo build --release          # builds all 4 bins: lm-test, lm-sweep, lm-rig, lm-spin-sweep
+cargo test
 
-./scripts/render.sh                    # Render all three cases with Blender into renders/<case>
-./scripts/test-e2e.sh                  # Full E2E: builds Rust, renders, runs all test cases (PASS/FAIL)
-./scripts/run.sh                       # Build, render, and run for quick iteration
-./scripts/view.sh <case> [--debug]     # Stereo contact sheet + MP4 into viz/<case>/ (--debug = overlays)
-./scripts/cleanup.sh                   # Remove renders/ and debug frames
+# Core E2E (overhead stereo position pipeline, 3 standard shots)
+./scripts/test-e2e.sh                   # build + render + run (PASS/FAIL)
+./scripts/view.sh <case> [--debug]      # stereo contact sheet + MP4 into viz/<case>/ (--debug = overlays)
+./scripts/cleanup.sh                    # remove renders/ and debug frames
 
-cargo build --release --bin lm-sweep                 # Build the hardware-config sweep
-RENDER=1 ./target/release/lm-sweep [configs/sweep.json]  # Sweep configs -> results/sweep.csv + cost frontier
+# Rigs — first-class camera setups in rigs/*.json (generate via scripts/gen_rigs.py)
+python3 scripts/gen_rigs.py             # (re)generate rigs/overhead_stereo.json, rigs/spin_overhead_mono.json
+RENDER=1 ./target/release/lm-rig <rig>  # render + solve a named rig (default overhead_stereo)
 
-RUST_LOG=debug cargo run               # Run with debug logging
+# Sweeps
+RENDER=1 ./target/release/lm-sweep [configs/sweep.json]   # hardware-config sweep -> results/sweep.csv + cost frontier
+SPIN_METHOD=global RENDER=1 ./target/release/lm-spin-sweep configs/<spec>.json  # spin sweep (SPIN_METHOD=search|dense|global)
+
+# ML spin estimator (Python, uv venv + PyTorch MPS) — see ml/README.md
+bash ml/gen.sh train 3000 1000          # render training data (EEVEE; ENGINE=cycles for a Cycles eval set)
+ml/.venv/bin/python ml/dataset.py ml/data/train ml/data/train/cache.pt
+ml/.venv/bin/python ml/train.py --cache ml/data/train/cache.pt
+ml/.venv/bin/python ml/eval.py --cache <cache.pt> --ckpt ml/runs/spinnet.pt
 ```
 
-The binary is `lm-test`. The only frame source is a Blender-rendered dataset on disk. `lm-test` renders any missing case automatically; set `RENDER=1` to force re-render. Override the Blender binary with `BLENDER=...` (default `/Applications/Blender.app/Contents/MacOS/Blender`).
+Frame sources are Blender-rendered datasets on disk; binaries render any missing data automatically, or `RENDER=1` forces re-render. Override the Blender binary with `BLENDER=...` (default `/Applications/Blender.app/Contents/MacOS/Blender`).
 
 ## Architecture
 
@@ -54,9 +65,22 @@ Blender Cycles renderer (blender/render_shot.py)
 | `pipeline.rs` | Orchestrator — runs detection, filters consecutive pairs (max 3-frame gap), filters by median radius, triangulates, estimates spin |
 | `config.rs` | `StereoRig::overhead()` — computes intrinsics and converging (toe-in) camera extrinsics from physical parameters |
 | `debug.rs` | Overlay rendering (circles, lines, text) onto gray frames, saves annotated PNGs to `debug_frames/` |
-| `main.rs` | Test harness — renders missing cases via Blender, loads each dataset, runs 3 test cases (driver/7-iron/wedge), compares against ground truth |
+| `main.rs` (lm-test) | Core harness — renders missing cases via Blender, runs 3 standard shots (driver/7-iron/wedge) on the overhead stereo rig, compares to GT |
+| `config.rs` `Camera`/`CameraDef` | General camera from explicit position+aim+intrinsics (arbitrary placement); `StereoRig::overhead` is one generator |
+| `frame_source/rig_dataset.rs` | Loads a rig dataset (manifest with N cameras + per-frame per-camera PNGs); used by lm-rig |
+| `spin_tracker.rs` | Newer spin estimators: `estimate_spin_dense` (per-pair appearance NCC, `SPIN_METHOD=dense`) and `estimate_spin_global` (one shared rotation across all pairs, `SPIN_METHOD=global`, best classical) |
+| `sweep.rs` (lm-sweep) | Hardware-config sweep over rigs → accuracy + rough-cost frontier |
+| `rig_runner.rs` (lm-rig) | Run a named rig (`rigs/*.json`), solve position and/or spin per its `measures` |
+| `spin_sweep.rs` (lm-spin-sweep) | Sweep fps × zoom × rpm (× noise seeds) for spin estimators; `SPIN_METHOD` selects the method |
 
 The Unity simulator has been removed; frames now come entirely from the offline Blender renderer.
+
+### Rigs, spin estimators, and ML
+
+- **Rigs are the first-class experiment unit.** `rigs/<name>.json` defines a named device setup — a list of cameras placed by explicit position + aim + intrinsics, plus what it `measures` (`position` / `spin`). `lm-rig` renders+solves one; rigs are independent (own `renders/<rig>/`, `results/<rig>`). The overhead-convergence geometry is one generator (`scripts/gen_rigs.py`); arbitrary placement (side mounts, mono spin cam) is just data.
+- **Spin estimators evolved through four approaches** (logged with pre-registered keep/reject bars in `DESIGN.md`): exhaustive `search` (noise-fragile → rejected), `dense` per-pair registration, `global` multi-frame fit (best classical, works to ~37°/frame ≈ 1800 fps), and the **ML** estimator for the cheap-fps regime.
+- **ML spin** (`ml/`): PyTorch early-fusion CNN trained on renderer-labeled data; the only thing that works at the affordable 500–800 fps. See `ml/README.md`.
+- **Sensor realism**: `render_shot.py --exposure-us` adds global-shutter motion blur (strobe-frozen by default; long exposure is out of scope). Sensor noise / bit-depth are not yet modeled — current accuracy numbers are the low-noise ceiling.
 
 ### Render dataset format
 
@@ -76,5 +100,5 @@ Each `renders/<case>/` holds `manifest.json` plus `left_NNN.png` / `right_NNN.pn
 - **True pinhole, no calibration** — Blender's cameras have zero lens distortion, so there is no calibration handshake; intrinsics are known exactly
 - **Constant-velocity trajectory** — the renderer applies no gravity, drag, or Magnus; the ball travels in a straight line so the velocity fit is exact ground truth
 - **Temporal minimum background** — background model built from min pixel values across all frames in the shot
-- **3-stage spin search** — coarse (25 RPM steps) → medium (5 RPM) → fine (1 RPM), each narrowing the search window
+- **Spin estimation evolved** — the original 3-stage exhaustive search (still in `spin_detector.rs`, default in lm-test/lm-rig) proved noise-fragile; superseded by `global` multi-frame registration (classical, accurate to ~1800 fps) and an ML estimator (cheap 500–800 fps). See `DESIGN.md` for the full kept/rejected log.
 - **Outlier rejection** — velocity fit uses residual-based filtering (mean + 2σ threshold) when ≥4 frames available
