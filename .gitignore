@@ -13,3 +13,6 @@
 /*.png
 /viz/
 /results/
+/ml/.venv/
+/ml/data/
+/ml/runs/
