@@ -1,4 +1,5 @@
 /target
+/renders/
 /screenshots
 /debug_frames
 .DS_Store
@@ -10,3 +11,4 @@
 /LaunchMonitorSharedMemory
 /e2e.log
 /*.png
+/viz/

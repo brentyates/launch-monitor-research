@@ -1,7 +1,10 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -e
 
-echo "Cleaning up launch monitor processes..."
-pkill -f "LaunchSimulator" 2>/dev/null || true
-pkill -f "lm-gui" 2>/dev/null || true
-rm -f /tmp/LaunchMonitorSharedMemory
-echo "Done"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+rm -rf "$ROOT/renders"
+rm -rf "$ROOT/debug_frames"/*
+rm -f "$ROOT/LaunchMonitorSharedMemory"
+
+echo "Cleaned."

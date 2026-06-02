@@ -9,26 +9,27 @@ cargo build --release --bin lm-test    # Build release binary
 cargo check                            # Type-check without building
 cargo test                             # Run unit tests
 
-./scripts/test-e2e.sh                  # Full E2E: builds Rust, launches Unity, runs all test cases
-./scripts/run.sh                       # Launch Unity + Rust together (requires pre-built binary)
-./scripts/build-unity.sh               # Build Unity project from CLI (requires Unity 6000.4.3f1)
-./scripts/cleanup.sh                   # Kill stale processes, remove shared memory file
+./scripts/render.sh                    # Render all three cases with Blender into renders/<case>
+./scripts/test-e2e.sh                  # Full E2E: builds Rust, renders, runs all test cases (PASS/FAIL)
+./scripts/run.sh                       # Build, render, and run for quick iteration
+./scripts/view.sh <case> [--debug]     # Stereo contact sheet + MP4 into viz/<case>/ (--debug = overlays)
+./scripts/cleanup.sh                   # Remove renders/ and debug frames
 
 RUST_LOG=debug cargo run               # Run with debug logging
 ```
 
-The binary is `lm-test`. There is no separate `lm-server` or WebSocket mode in the current code — the only frame source is shared memory from Unity.
+The binary is `lm-test`. The only frame source is a Blender-rendered dataset on disk. `lm-test` renders any missing case automatically; set `RENDER=1` to force re-render. Override the Blender binary with `BLENDER=...` (default `/Applications/Blender.app/Contents/MacOS/Blender`).
 
 ## Architecture
 
-Stereo CV pipeline that receives frames from a Unity 6 simulator via shared memory, detects a golf ball in each stereo view, triangulates 3D positions, estimates launch parameters, and detects spin.
+Stereo CV pipeline that loads Blender-rendered stereo frames from disk, detects a golf ball in each stereo view, triangulates 3D positions, estimates launch parameters, and detects spin.
 
 ### Data Flow
 
 ```
-Unity Simulator (4kHz physics, configurable render FPS)
-  → Shared memory ring buffer ({project_dir}/LaunchMonitorSharedMemory, 12 slots)
-    → SharedMemorySource reads frames, flips Y, converts RGBA→Gray
+Blender Cycles renderer (blender/render_shot.py)
+  → renders/<case>/{left,right}_NNN.png + manifest.json (one shot per case)
+    → RenderedDatasetSource reads PNGs + manifest, converts RGB→Gray
       → BallDetector: background subtraction → peak finding → weighted centroid
         → StereoTriangulator: DLT-SVD triangulation → least-squares velocity fit
           → SpinDetector: TP5 Pix chevron pattern matching (coarse→medium→fine search)
@@ -39,18 +40,20 @@ Unity Simulator (4kHz physics, configurable render FPS)
 
 | Module | Purpose |
 |--------|---------|
-| `frame_source/shared_memory.rs` | Mmap-based reader for Unity's ring buffer. Handles volatile reads, Y-flip, RGBA→Gray conversion |
+| `frame_source/rendered_dataset.rs` | Reads `manifest.json` + PNG frame pairs from `renders/<case>/`, converts RGB→Gray (no Y-flip). Replaces the removed Unity shared-memory source |
 | `ball_detector.rs` | Temporal-minimum background model, peak-based detection with weighted centroid |
 | `triangulation.rs` | OpenCV-style projection matrices (P = K[R|t]), DLT-SVD triangulation, velocity fitting with outlier rejection (mean ± 2σ) |
 | `spin_detector.rs` | 3-stage exhaustive search (273K hypotheses at coarse, parallelized with Rayon) over RPM/axis/orientation. Scores by projecting TP5 Pix chevron geometry onto detected features |
 | `pipeline.rs` | Orchestrator — runs detection, filters consecutive pairs (max 3-frame gap), filters by median radius, triangulates, estimates spin |
 | `config.rs` | `StereoRig::overhead()` — computes intrinsics and converging (toe-in) camera extrinsics from physical parameters |
 | `debug.rs` | Overlay rendering (circles, lines, text) onto gray frames, saves annotated PNGs to `debug_frames/` |
-| `main.rs` | Test harness — connects to shared memory, runs 3 test cases (driver/7-iron/wedge), compares against ground truth |
+| `main.rs` | Test harness — renders missing cases via Blender, loads each dataset, runs 3 test cases (driver/7-iron/wedge), compares against ground truth |
 
-### Shared Memory Protocol
+The Unity simulator has been removed; frames now come entirely from the offline Blender renderer.
 
-Header (104 bytes) followed by 12 frame slots. Unity writes, Rust polls `write_head`. States: Idle(0) → Ready(1) → Streaming(2) → Complete(3). Rust sends commands back via `rust_command` field in header (1=launch with params, 2=reset).
+### Render dataset format
+
+Each `renders/<case>/` holds `manifest.json` plus `left_NNN.png` / `right_NNN.png` pairs. `manifest.json` carries width/height/fps, the per-frame timestamps and filenames, and the shot ground truth. `RenderedDatasetSource` is the only consumer; see it and `blender/render_shot.py` for the exact fields.
 
 ### Coordinate/Unit Conventions
 
@@ -62,7 +65,9 @@ Header (104 bytes) followed by 12 frame slots. Unity writes, Rust polls `write_h
 ### Key Design Decisions
 
 - **Converging stereo** (toe-in) rather than parallel baseline — convergence point computed from FOV and hitting zone size
-- **Temporal minimum background** — no separate calibration; background model built from min pixel values across all frames in the shot
-- **12-slot ring buffer** — fixed memory, prevents unbounded growth
+- **Self-consistent renderer** — `blender/render_shot.py` builds its two cameras directly from the same `StereoRig::overhead()` parameters used by triangulation, so geometry matches by construction
+- **True pinhole, no calibration** — Blender's cameras have zero lens distortion, so there is no calibration handshake; intrinsics are known exactly
+- **Constant-velocity trajectory** — the renderer applies no gravity, drag, or Magnus; the ball travels in a straight line so the velocity fit is exact ground truth
+- **Temporal minimum background** — background model built from min pixel values across all frames in the shot
 - **3-stage spin search** — coarse (25 RPM steps) → medium (5 RPM) → fine (1 RPM), each narrowing the search window
 - **Outlier rejection** — velocity fit uses residual-based filtering (mean + 2σ threshold) when ≥4 frames available

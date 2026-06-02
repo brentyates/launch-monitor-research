@@ -1,6 +1,6 @@
-mod shared_memory;
+mod rendered_dataset;
 
-pub use shared_memory::SharedMemorySource;
+pub use rendered_dataset::RenderedDatasetSource;
 
 use image::GrayImage;
 
