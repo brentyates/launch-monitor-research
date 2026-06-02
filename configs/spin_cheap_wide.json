@@ -1,0 +1,8 @@
+{
+  "base_shot": { "speed_mph": 120.0, "vla_deg": 16.0, "hla_deg": 0.0 },
+  "spin_axis_deg": 0.0,
+  "fps_list": [500.0, 800.0],
+  "focal_list": [12.0],
+  "spin_rpm_list": [3000.0, 5000.0, 7000.0, 9500.0],
+  "seeds": 5
+}
