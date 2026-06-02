@@ -14,13 +14,14 @@ class SpinNet(nn.Module):
             nn.Conv2d(nmax, 32, 5, 2, 2), nn.BatchNorm2d(32), nn.ReLU(),
             nn.Conv2d(32, 64, 3, 2, 1), nn.BatchNorm2d(64), nn.ReLU(),
             nn.Conv2d(64, 128, 3, 2, 1), nn.BatchNorm2d(128), nn.ReLU(),
-            nn.Conv2d(128, 128, 3, 2, 1), nn.BatchNorm2d(128), nn.ReLU(),
-            nn.AdaptiveAvgPool2d(2), nn.Flatten(),
-            nn.Linear(128 * 4, 256), nn.ReLU(),
+            nn.Conv2d(128, 256, 3, 2, 1), nn.BatchNorm2d(256), nn.ReLU(),
+            nn.Conv2d(256, 256, 3, 2, 1), nn.BatchNorm2d(256), nn.ReLU(),
+            nn.AdaptiveAvgPool2d(5), nn.Flatten(),
+            nn.Linear(256 * 25, 512), nn.ReLU(),
         )
         self.head = nn.Sequential(
-            nn.Linear(256 + 2, 128), nn.ReLU(),
-            nn.Linear(128, 2),
+            nn.Linear(512 + 2, 256), nn.ReLU(),
+            nn.Linear(256, 2),
         )
 
     def forward(self, x, n, fps):

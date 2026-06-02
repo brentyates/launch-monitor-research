@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 
 NMAX = 6
-CROP = 96
+CROP = 160
 
 
 def load_crop(path, u, v, ball_px):
