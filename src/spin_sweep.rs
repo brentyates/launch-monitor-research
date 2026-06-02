@@ -15,6 +15,10 @@ struct BaseShot {
     hla_deg: f64,
 }
 
+fn one() -> usize {
+    1
+}
+
 #[derive(Debug, Deserialize)]
 struct SpinSweepSpec {
     base_shot: BaseShot,
@@ -22,18 +26,23 @@ struct SpinSweepSpec {
     fps_list: Vec<f64>,
     focal_list: Vec<f64>,
     spin_rpm_list: Vec<f64>,
+    #[serde(default = "one")]
+    seeds: usize,
 }
 
-struct Row {
+struct Cell {
     fps: f64,
     focal_mm: f64,
     rpm: f64,
     rot_per_frame: f64,
     frames: usize,
     ball_px: f64,
-    rate_err_pct: f64,
-    axis_err_deg: f64,
-    tier: &'static str,
+    n: usize,
+    mean_err: f64,
+    std_err: f64,
+    min_err: f64,
+    max_err: f64,
+    perfect: usize,
 }
 
 const AIM_Y_MM: f64 = 437.116;
@@ -51,69 +60,101 @@ fn main() {
 
     let spec: SpinSweepSpec =
         serde_json::from_str(&std::fs::read_to_string(&spec_path).expect("read spec")).expect("parse spec");
+    let seeds = spec.seeds.max(1);
 
-    let total = spec.fps_list.len() * spec.focal_list.len() * spec.spin_rpm_list.len();
-    println!("Spin sweep: {} combinations\n", total);
+    println!(
+        "Spin sweep: {} cells x {} seeds = {} renders\n",
+        spec.fps_list.len() * spec.focal_list.len() * spec.spin_rpm_list.len(),
+        seeds,
+        spec.fps_list.len() * spec.focal_list.len() * spec.spin_rpm_list.len() * seeds
+    );
 
-    let mut rows: Vec<Row> = Vec::new();
+    let mut cells: Vec<Cell> = Vec::new();
+    let mut csv = String::from("fps,focal_mm,rpm,seed,frames,ball_px,rate_err_pct,axis_err_deg,tier\n");
 
     for &fps in &spec.fps_list {
         for &focal in &spec.focal_list {
             for &rpm in &spec.spin_rpm_list {
-                let id = format!("f{}_fps{}_rpm{}", focal as i64, fps as i64, rpm as i64);
-                let dir = format!("{}/renders/spin_sweep/{}", project_dir, id);
-                let manifest = format!("{}/manifest.json", dir);
+                let cell_id = format!("f{}_fps{}_rpm{}", focal as i64, fps as i64, rpm as i64);
+                let cell_dir = format!("{}/renders/spin_sweep/{}", project_dir, cell_id);
+                write_rig(&cell_dir, fps, focal);
 
-                if force_render || !Path::new(&manifest).exists() {
-                    write_rig(&dir, fps, focal);
-                    if let Err(e) = render(project_dir, &dir, &spec, rpm) {
-                        eprintln!("{}: render failed: {}", id, e);
-                        continue;
+                let mut errs: Vec<f64> = Vec::new();
+                let mut frames = 0usize;
+                let mut ball_px = 0.0;
+                let mut perfect = 0usize;
+
+                for seed in 0..seeds {
+                    let out = format!("{}/seed{}", cell_dir, seed);
+                    if force_render || !Path::new(&format!("{}/manifest.json", out)).exists() {
+                        if let Err(e) = render(project_dir, &cell_dir, &out, &spec, rpm, seed) {
+                            eprintln!("{} seed{}: render failed: {}", cell_id, seed, e);
+                            continue;
+                        }
+                    }
+                    let dataset = match load_rig_dataset(Path::new(&out)) {
+                        Ok(d) => d,
+                        Err(_) => continue,
+                    };
+                    let grays: Vec<GrayImage> = {
+                        let mut seq = dataset.gray_seq("spin0");
+                        seq.sort_by_key(|(idx, _, _)| *idx);
+                        seq.into_iter().map(|(_, _, g)| g).collect()
+                    };
+                    let (rate_err, axis_err, px, n) = match detect_spin(&grays, fps) {
+                        Some((rpm_est, axis_est, px, n)) => (
+                            ((rpm_est - rpm) / rpm * 100.0).abs(),
+                            (axis_est - spec.spin_axis_deg).abs(),
+                            px,
+                            n,
+                        ),
+                        None => (f64::NAN, f64::NAN, 0.0, grays.len()),
+                    };
+                    let t = if rate_err.is_nan() { "NODETECT" } else { tier(rate_err, axis_err) };
+                    csv.push_str(&format!(
+                        "{},{},{},{},{},{:.1},{:.3},{:.3},{}\n",
+                        fps, focal, rpm, seed, n, px, rate_err, axis_err, t
+                    ));
+                    if !rate_err.is_nan() {
+                        errs.push(rate_err);
+                        frames = n;
+                        ball_px = px;
+                        if t == "PERFECT" {
+                            perfect += 1;
+                        }
                     }
                 }
 
-                let dataset = match load_rig_dataset(Path::new(&dir)) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        eprintln!("{}: load failed: {}", id, e);
-                        continue;
-                    }
-                };
-
-                let grays: Vec<GrayImage> = {
-                    let mut seq = dataset.gray_seq("spin0");
-                    seq.sort_by_key(|(idx, _, _)| *idx);
-                    seq.into_iter().map(|(_, _, g)| g).collect()
-                };
-
-                let rot_per_frame = 6.0 * rpm / fps;
-                let row = match detect_spin(&grays, fps) {
-                    Some((rpm_est, axis_est, ball_px, n)) => {
-                        let rate_err = ((rpm_est - rpm) / rpm * 100.0).abs();
-                        let axis_err = (axis_est - spec.spin_axis_deg).abs();
-                        Row {
-                            fps, focal_mm: focal, rpm, rot_per_frame, frames: n, ball_px,
-                            rate_err_pct: rate_err, axis_err_deg: axis_err,
-                            tier: tier(rate_err, axis_err),
-                        }
-                    }
-                    None => Row {
-                        fps, focal_mm: focal, rpm, rot_per_frame, frames: grays.len(), ball_px: 0.0,
-                        rate_err_pct: f64::NAN, axis_err_deg: f64::NAN, tier: "NODETECT",
-                    },
-                };
+                let cell = summarize(fps, focal, rpm, frames, ball_px, perfect, &errs);
                 println!(
-                    "fps={:<5} f={:<3}mm rpm={:<6} rot/frame={:>5.1}° frames={:<2} px={:>5.1} rate_err={:>7.2}% axis_err={:>5.2}° [{}]",
-                    row.fps, row.focal_mm, row.rpm, row.rot_per_frame, row.frames, row.ball_px,
-                    row.rate_err_pct, row.axis_err_deg, row.tier
+                    "fps={:<5} f={:<3}mm rpm={:<6} rot/frame={:>5.1}° frames={:<2} px={:>5.1} | rate_err mean={:>6.1}% std={:>6.1}% [{:.1}–{:.1}] perfect={}/{}",
+                    cell.fps, cell.focal_mm, cell.rpm, cell.rot_per_frame, cell.frames, cell.ball_px,
+                    cell.mean_err, cell.std_err, cell.min_err, cell.max_err, cell.perfect, seeds
                 );
-                rows.push(row);
+                cells.push(cell);
             }
         }
     }
 
-    write_csv(project_dir, &rows);
-    print_summary(&rows);
+    write_csv(project_dir, &csv);
+    print_summary(&cells, seeds);
+}
+
+fn summarize(
+    fps: f64, focal_mm: f64, rpm: f64, frames: usize, ball_px: f64, perfect: usize, errs: &[f64],
+) -> Cell {
+    let rot_per_frame = 6.0 * rpm / fps;
+    let n = errs.len();
+    let (mean_err, std_err, min_err, max_err) = if n == 0 {
+        (f64::NAN, f64::NAN, f64::NAN, f64::NAN)
+    } else {
+        let mean = errs.iter().sum::<f64>() / n as f64;
+        let var = errs.iter().map(|e| (e - mean).powi(2)).sum::<f64>() / n as f64;
+        let min = errs.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = errs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        (mean, var.sqrt(), min, max)
+    };
+    Cell { fps, focal_mm, rpm, rot_per_frame, frames, ball_px, n, mean_err, std_err, min_err, max_err, perfect }
 }
 
 fn detect_spin(grays: &[GrayImage], fps: f64) -> Option<(f64, f64, f64, usize)> {
@@ -181,22 +222,23 @@ fn write_rig(dir: &str, fps: f64, focal: f64) {
     std::fs::write(format!("{}/rig.json", dir), serde_json::to_string_pretty(&rig).unwrap()).ok();
 }
 
-fn render(project_dir: &str, dir: &str, spec: &SpinSweepSpec, rpm: f64) -> std::io::Result<()> {
+fn render(project_dir: &str, cell_dir: &str, out: &str, spec: &SpinSweepSpec, rpm: f64, seed: usize) -> std::io::Result<()> {
     let blender = std::env::var("BLENDER")
         .unwrap_or_else(|_| "/Applications/Blender.app/Contents/MacOS/Blender".to_string());
     let status = Command::new(blender)
         .args([
             "--background", "--factory-startup", "--python",
             &format!("{}/blender/render_shot.py", project_dir), "--",
-            "--rig", &format!("{}/rig.json", dir),
+            "--rig", &format!("{}/rig.json", cell_dir),
             "--case", "spin",
             "--speed", &spec.base_shot.speed_mph.to_string(),
             "--vla", &spec.base_shot.vla_deg.to_string(),
             "--hla", &spec.base_shot.hla_deg.to_string(),
             "--spin", &rpm.to_string(),
             "--axis", &spec.spin_axis_deg.to_string(),
-            "--out", dir,
+            "--out", out,
             "--frames", "24",
+            "--seed", &seed.to_string(),
         ])
         .status()?;
     if !status.success() {
@@ -205,37 +247,32 @@ fn render(project_dir: &str, dir: &str, spec: &SpinSweepSpec, rpm: f64) -> std::
     Ok(())
 }
 
-fn write_csv(project_dir: &str, rows: &[Row]) {
-    let mut csv = String::from("fps,focal_mm,rpm,rot_per_frame_deg,frames,ball_px,rate_err_pct,axis_err_deg,tier\n");
-    for r in rows {
-        csv.push_str(&format!(
-            "{},{},{},{:.2},{},{:.1},{:.3},{:.3},{}\n",
-            r.fps, r.focal_mm, r.rpm, r.rot_per_frame, r.frames, r.ball_px,
-            r.rate_err_pct, r.axis_err_deg, r.tier
-        ));
-    }
+fn write_csv(project_dir: &str, csv: &str) {
     std::fs::create_dir_all(format!("{}/results", project_dir)).ok();
     let path = format!("{}/results/spin_sweep.csv", project_dir);
     std::fs::write(&path, csv).expect("write csv");
-    println!("\nFull results: {}", path);
+    println!("\nPer-seed results: {}", path);
 }
 
-fn print_summary(rows: &[Row]) {
-    let perfect: Vec<&Row> = rows.iter().filter(|r| r.tier == "PERFECT").collect();
-    println!("\n{}", "=".repeat(70));
-    println!("  PERFECT spin detection ({} of {} combos):", perfect.len(), rows.len());
-    println!("{}", "=".repeat(70));
-    for r in &perfect {
-        println!(
-            "  fps={:<5} f={:<3}mm rpm={:<6} rot/frame={:>5.1}° frames={} px={:.0}",
-            r.fps, r.focal_mm, r.rpm, r.rot_per_frame, r.frames, r.ball_px
-        );
+fn print_summary(cells: &[Cell], seeds: usize) {
+    println!("\n{}", "=".repeat(78));
+    println!("  ROBUSTNESS (mean error and spread across {} noise seeds per cell)", seeds);
+    println!("{}", "=".repeat(78));
+    let robust: Vec<&Cell> = cells
+        .iter()
+        .filter(|c| c.n > 0 && c.mean_err <= 5.0 && c.std_err <= 5.0)
+        .collect();
+    if robust.is_empty() {
+        println!("  No cell is robustly accurate (mean<=5% AND std<=5%) across seeds.");
+        println!("  => instability is NOT removed by these conditions; the detector itself is the limit.");
+    } else {
+        println!("  Robustly accurate cells (mean<=5% AND std<=5% across seeds):");
+        for c in &robust {
+            println!(
+                "    fps={:<5} f={:<3}mm rpm={:<6} frames={} px={:.0} mean={:.1}% std={:.1}%",
+                c.fps, c.focal_mm, c.rpm, c.frames, c.ball_px, c.mean_err, c.std_err
+            );
+        }
     }
-    let ok: Vec<&Row> = rows.iter().filter(|r| r.tier == "PERFECT" || r.tier == "GOOD").collect();
-    if !ok.is_empty() {
-        let lo = ok.iter().map(|r| r.rot_per_frame).fold(f64::INFINITY, f64::min);
-        let hi = ok.iter().map(|r| r.rot_per_frame).fold(f64::NEG_INFINITY, f64::max);
-        println!("\n  PERFECT/GOOD spans rotation-per-frame ~{:.1}° to ~{:.1}°", lo, hi);
-        println!("  (below ~{:.1}° = too little rotation/too few frames; above = aliasing)", lo);
-    }
+    println!("\n  Key question: does std shrink as fps/frames rise? (hardware lever) or stay high? (algorithm lever)");
 }

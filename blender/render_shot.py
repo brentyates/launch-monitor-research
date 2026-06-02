@@ -109,6 +109,8 @@ def parse_args():
     p.add_argument("--pixel-pitch-mm", type=float, default=PIXEL_PITCH_MM)
     p.add_argument("--exposure-us", type=float, default=0.0,
                    help="exposure time in microseconds; 0 = no motion blur (instantaneous)")
+    p.add_argument("--seed", type=int, default=0,
+                   help="Cycles render seed; vary for independent noise realizations")
     return p.parse_args(argv)
 
 
@@ -282,6 +284,7 @@ def run_rig(args):
     scene = bpy.context.scene
     clear_scene()
     setup_render_engine(scene, samples)
+    scene.cycles.seed = args.seed
 
     cam_objs = {}
     for cam in cameras:
