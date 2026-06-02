@@ -20,6 +20,10 @@ HEIGHT = 384
 BALL_BLEND = "/Users/byates/projects/launch-monitor-research/blender/tp5_pix_ball.blend"
 
 
+def _vec3(s):
+    return tuple(float(v) for v in s.split(","))
+
+
 def look_at_rows(eye, target):
     fwd = (target - eye).normalized()
     world_up = Vector((0.0, 1.0, 0.0)) if abs(fwd.z) > 0.999 else Vector((0.0, 0.0, 1.0))
@@ -71,6 +75,11 @@ def parse_args():
     p.add_argument("--samples", type=int, default=16)
     p.add_argument("--max-frames", type=int, default=12)
     p.add_argument("--engine", default="eevee")
+    p.add_argument("--cam", default=None, help="camera position x,y,z mm")
+    p.add_argument("--aim", default=None, help="camera aim x,y,z mm")
+    p.add_argument("--width", type=int, default=WIDTH)
+    p.add_argument("--height", type=int, default=HEIGHT)
+    p.add_argument("--light-energy", type=float, default=50.0)
     return p.parse_args(argv)
 
 
@@ -158,12 +167,15 @@ def make_turf(scene):
     turf.data.materials.append(mat)
 
 
-def make_lights(scene):
-    sun_data = bpy.data.lights.new("Sun", type='SUN')
-    sun_data.energy = 2.5
-    sun_data.angle = 0.0
-    sun = bpy.data.objects.new("Sun", sun_data)
-    scene.collection.objects.link(sun)
+def make_lights(scene, device_light_energy):
+    # Model the device's IR illumination: a bright light co-located with the
+    # camera (light from the camera's viewpoint), dark controlled ambient.
+    # Shadow falls behind the ball (hidden from the camera), markings front-lit.
+    light_data = bpy.data.lights.new("DeviceLight", type='POINT')
+    light_data.energy = device_light_energy
+    light = bpy.data.objects.new("DeviceLight", light_data)
+    light.location = tuple(c / 1000.0 for c in CAM_POS)
+    scene.collection.objects.link(light)
     world = scene.world
     if world is None:
         world = bpy.data.worlds.new("World")
@@ -176,6 +188,13 @@ def make_lights(scene):
 
 def main():
     args = parse_args()
+    global CAM_POS, CAM_AIM, WIDTH, HEIGHT
+    if args.cam:
+        CAM_POS = _vec3(args.cam)
+    if args.aim:
+        CAM_AIM = _vec3(args.aim)
+    WIDTH = args.width
+    HEIGHT = args.height
     os.makedirs(os.path.join(args.out, "raw"), exist_ok=True)
     labels_path = os.path.join(args.out, "labels.jsonl")
 
@@ -185,7 +204,7 @@ def main():
     cam = make_camera(scene)
     ball = load_ball(scene)
     make_turf(scene)
-    make_lights(scene)
+    make_lights(scene, args.light_energy)
 
     rng = random.Random(args.seed_base)
     written = 0
