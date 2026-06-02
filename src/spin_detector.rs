@@ -113,6 +113,10 @@ impl SpinDetector {
         (crop, x0 as f64, y0 as f64)
     }
 
+    pub fn ball_features(gray: &GrayImage, center: (f64, f64), radius: f64) -> Vec<(f64, f64)> {
+        Self::detect_features(gray, center, radius)
+    }
+
     fn detect_features(gray: &GrayImage, center: (f64, f64), radius: f64) -> Vec<(f64, f64)> {
         let (crop, ox, oy) = Self::crop_ball(gray, center, radius);
         let lc = (center.0 - ox, center.1 - oy);

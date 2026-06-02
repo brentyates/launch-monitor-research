@@ -1,6 +1,6 @@
 use image::GrayImage;
 use launch_monitor_research::{
-    load_rig_dataset, BallDetector, FrameSpin, SpinDetector,
+    estimate_spin_interframe, load_rig_dataset, BallDetector, FrameSpin, SpinDetector,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -184,10 +184,16 @@ fn detect_spin(grays: &[GrayImage], fps: f64) -> Option<(f64, f64, f64, usize)> 
     radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let ball_px = 2.0 * radii[radii.len() / 2];
 
-    let detector = SpinDetector::new(fps);
-    match detector.detect(&frames) {
-        Ok(s) => Some((s.rpm, s.axis_deg, ball_px, frames.len())),
-        Err(_) => None,
+    let method = std::env::var("SPIN_METHOD").unwrap_or_else(|_| "search".to_string());
+    if method == "interframe" {
+        let s = estimate_spin_interframe(&frames, fps)?;
+        Some((s.rpm, s.axis_deg, ball_px, frames.len()))
+    } else {
+        let detector = SpinDetector::new(fps);
+        match detector.detect(&frames) {
+            Ok(s) => Some((s.rpm, s.axis_deg, ball_px, frames.len())),
+            Err(_) => None,
+        }
     }
 }
 
