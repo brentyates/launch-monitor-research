@@ -115,6 +115,13 @@ This matters: a clean pinhole render gives the **geometric ceiling** for a confi
 3. **Sensor realism** — motion blur (finite exposure), sensor noise, bit depth — so "cheap vs expensive" actually diverges and the cost frontier becomes real. (Global shutter only; rolling shutter is out of scope.)
 4. **Machine learning** (later — not yet, but a major intended direction).
 
+## Key findings so far
+
+- **Positioning is easy and cheap.** Sub-1% speed/angle across the envelope at modest hardware. At the geometric ceiling the binding constraint is *frame count* (FOV × fps vs ball speed), not pixel precision.
+- **The strobe matters more than the camera price.** The same cheap camera is GOOD with a short strobe and fails badly with a long exposure (motion blur) — spend on lighting/strobe first. (Long exposure is ruled out as a technique regardless.)
+- **A single zoomed overhead camera can read spin in the mid-envelope** (7-iron: 0.6% rate, chevrons legible at 53 px), so the 2-stereo + 1-spin hybrid is viable in principle.
+- **But the current spin detector is pathologically noise-sensitive.** With identical geometry/shot/detector, changing only the Cycles sample count 24→32 (sub-pixel render noise, invisible to the eye) swung spin-rate error between 59% and 0.6%. So current spin accuracy is *noise-dominated, not condition-dominated*; a "perfect" reading is fragile. Real sensor noise dwarfs that perturbation, so **a robust/learned spin estimator is the critical path** — hardware (fps for aliasing, zoom for pixels) is necessary but not sufficient. A meaningful spin-conditions sweep must be *statistical* (N noise realizations per condition → error distribution), or run against a robust detector. Open question: does higher fps / more frames stabilize the current detector, or only a better algorithm?
+
 ## Machine learning opportunities (future)
 
 The renderer is, in effect, a **perfect-label synthetic-data factory**: every rendered frame comes with exact ground truth (3D ball position/velocity, spin rate/axis, launch params, camera pose). That makes this project unusually well-suited to ML, and ML is a strong lever on the core goal — *learned models can make cheaper, noisier hardware viable*, pushing the cost frontier down further than classical CV alone. Candidate problems, roughly easiest → most ambitious:

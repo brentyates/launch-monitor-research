@@ -20,6 +20,10 @@ path = "src/sweep.rs"
 name = "lm-rig"
 path = "src/rig_runner.rs"
 
+[[bin]]
+name = "lm-spin-sweep"
+path = "src/spin_sweep.rs"
+
 [dependencies]
 nalgebra = "0.33"
 image = "0.25"
