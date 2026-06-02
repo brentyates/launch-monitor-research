@@ -149,6 +149,15 @@ Real-world anchor: **Square Golf** — a $700 side-mounted device doing spin at 
 2. **Anchor to Square:** validate the sim by reproducing a real device's known result at its known config, rather than trusting a clean sim in isolation. Currently the clean sim (~7%) *trails* Square's claimed ~1% — i.e. the sim is **conservative vs reality, not over-ideal** (reassuring); the gap is headroom (more frames/better algorithm), not over-idealization.
 3. **Sequence: match reality, then degrade.** Close the gap to the real device's capability, then layer the degradations (calibrated so the sim reproduces the anchor) and report the **margin to the breaking point**. Buy only with margin under realistic, anchored degradation.
 
+## Overhead-telephoto spin works at 240 fps (the original vision is viable)
+
+Overhead is the desired architecture (ceiling-mount, out of the hitting area, ambidextrous). The cheap side approach (Square) reaches spin via *proximity* (big ball, low IR power); overhead reaches the same big ball via a **telephoto lens** instead — at a hardware premium confirmed in sim:
+
+- **~36 mm telephoto** (vs ~8 mm side) for a ~125–150 px ball at ~2.5 m.
+- **~22× IR power** (inverse-square: (2.5/0.48)² — sim needed light energy 760 vs 35 to match brightness). This is almost certainly *why* cheap monitors are side-mounted and overhead ones are premium.
+
+**Result (overhead, 240 fps, ML, ~1700 shots):** held-out **rpm median 0.83% / axis 0.31°**, uniform across driver/iron/wedge (0.6–1.0%), train fit 0.73%. **Matches/beats Square's ~1% claim and beats the (un-optimized, obliquely-aimed) side rig (2.3%).** So the foreshortening worry didn't materialize — the model handles the top-down view well. Caveat: this is the **clean ceiling** (beating Square's *real* 1% is expected with no degradation); the real test is surviving the degradation pass (sensor noise, detection error, marking wear, ambient IR) at ≤~1–2%. Gen via chunked process (`/tmp/oh_gen.sh` pattern) to dodge the Metal long-session crash.
+
 ## Machine learning opportunities (future)
 
 The renderer is, in effect, a **perfect-label synthetic-data factory**: every rendered frame comes with exact ground truth (3D ball position/velocity, spin rate/axis, launch params, camera pose). That makes this project unusually well-suited to ML, and ML is a strong lever on the core goal — *learned models can make cheaper, noisier hardware viable*, pushing the cost frontier down further than classical CV alone. Candidate problems, roughly easiest → most ambitious:
