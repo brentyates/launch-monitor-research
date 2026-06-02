@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Purpose
+
+The project's goal is a **hardware feasibility & optimization study**: determine the cheapest hardware (camera fps/resolution/shutter, lens, lighting) and best placement (mount height/offset, stereo baseline/convergence) that can build a working DIY overhead golf launch monitor meeting an accuracy budget — all in simulation, without buying hardware. The CV pipeline and Blender renderer are the means to explore that design space with exact ground truth. See `DESIGN.md` for the full objective, design space, accuracy tiers, and methodology. The current harness validates one hardcoded rig; the roadmap is config-driven sweeps (Phase 2) then sensor realism (Phase 3).
+
 ## Commands
 
 ```bash

@@ -1,12 +1,14 @@
 # Launch Monitor Research
 
-Research into building a golf launch monitor using computer vision — specifically, developing and validating the CV algorithms needed to extract full launch data (ball speed, launch angles, spin rate, spin axis, and eventually club data) from high-speed stereo camera footage.
+**Goal: find the cheapest hardware that can build a working DIY overhead golf launch monitor — without buying any hardware to find out.** The optimal trade-off across mount placement, stereo geometry, frame rate, resolution, lens, and lighting, for the lowest cost that still hits an acceptable accuracy budget. See [DESIGN.md](DESIGN.md) for the objective, the design space, the accuracy budget, and the methodology.
+
+The CV pipeline and the Blender renderer in this repo are the *means*: they let us explore that hardware design space in simulation, with exact ground truth, instead of buying and re-mounting cameras to find out what works.
 
 ## Why render synthetic shots?
 
-The core challenge with launch monitor development is the feedback loop. Real hardware setups are expensive, time-consuming to reconfigure, and produce data with no ground truth to validate against. You can't tell if your triangulation is wrong or your camera placement is bad without already knowing the answer.
+The core challenge with launch monitor development is the feedback loop. Real hardware setups are expensive, time-consuming to reconfigure, and produce data with no ground truth to validate against. You can't tell if your triangulation is wrong or your camera placement is bad without already knowing the answer — and you can't compare a dozen candidate hardware configs without buying a dozen cameras.
 
-This project develops the CV pipeline against rendered shots with exact ground truth. The renderer provides:
+This project develops the CV pipeline against rendered shots with exact ground truth, so any rig configuration can be measured before a dollar is spent. The renderer provides:
 
 - **Known ground truth** for every launch parameter, so algorithm accuracy is measurable
 - **Rapid iteration** on camera configurations without buying or moving hardware

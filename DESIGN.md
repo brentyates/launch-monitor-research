@@ -1,0 +1,108 @@
+# Design & Goals
+
+## The actual goal
+
+**Determine the cheapest hardware that can build a working DIY overhead golf launch monitor — without buying any hardware to find out.**
+
+Everything in this repo is in service of that one question. The CV pipeline, the Blender renderer, the accuracy metrics — they exist so we can explore the hardware/placement design space *in simulation*, measure what each configuration can actually recover, and find the **minimum viable spec**: the least expensive cameras, lenses, lighting, and mounting that still hit an acceptable accuracy budget.
+
+This is a feasibility-and-optimization study, not a product. "Make the CV pipeline work" is the *means*. "What should I buy, and where do I put it?" is the *end*.
+
+10,000 fps and a $5k camera would obviously work. The interesting question is how far down the cost curve we can go before accuracy falls off a cliff — and what configuration choices buy back the most accuracy per dollar.
+
+## What we're optimizing
+
+Minimize total hardware cost subject to meeting an accuracy budget across a realistic shot envelope.
+
+### Accuracy budget (starting targets — adjust to taste)
+
+Two tiers. The sweep reports which configs clear which tier.
+
+| Metric | "Useful" (practice feedback) | "Good" (near-commercial) |
+|--------|------------------------------|--------------------------|
+| Ball speed | ±2% | ±1% |
+| Launch angle (VLA) | ±1.0° | ±0.5° |
+| Horizontal angle (HLA) | ±1.0° | ±0.5° |
+| Spin rate | ±10% | ±5% |
+| Spin axis | ±3° | ±1.5° |
+
+(Commercial units claim ~±1 mph, ±0.3°, ±100–200 rpm. The current `main.rs` pass gate is 2% / 2° / 2° and ignores spin — that's looser than even the "Useful" tier and should be tightened once the sweep exists.)
+
+### Shot envelope (what the rig must handle)
+
+| | Speed (mph) | VLA (°) | HLA (°) | Spin (rpm) |
+|---|---|---|---|---|
+| Driver | 150–180 | 8–15 | −5…+5 | 2000–3500 |
+| Mid iron | 110–135 | 14–20 | −5…+5 | 5000–8000 |
+| Wedge | 70–95 | 24–32 | −3…+3 | 8000–11000 |
+
+A spec only "passes" if it meets the budget across this whole range (the fast/low driver and the slow/high wedge stress different things), ideally with several randomized shots per config rather than one nominal shot each.
+
+## The design space (what we sweep)
+
+**Camera / sensor** — the dominant cost driver:
+- **Frame rate** — {120, 240, 480, 960} fps. More frames in the field of view = better velocity/spin fits, but fps is the single biggest cost and availability constraint.
+- **Resolution** — {1456×1088, 728×544, 512×384, 320×240}. Higher res → larger ball in pixels → better detection/triangulation precision, but lowers max fps and raises cost/bandwidth.
+- **Shutter** — global vs rolling. Cheap cameras are rolling-shutter, which skews fast-moving objects.
+- **Bit depth** — 8 vs 10/12. Affects faint-feature contrast (chevrons for spin).
+
+**Optics:**
+- **Focal length** — {4, 6, 8, 12} mm. Trades field-of-view coverage against ball pixel size.
+
+**Geometry / placement:**
+- **Mount height** — 2.0–3.5 m
+- **Forward offset** — 0.5–1.5 m (downrange of the tee)
+- **Stereo baseline** — 200–500 mm
+- **Convergence angle** — derived from FOV + hitting zone, or swept directly
+
+**Lighting / exposure:**
+- Ambient vs **IR strobe**; exposure time (sets motion blur). Cheap IR LEDs are how you freeze a fast ball without an expensive global-shutter-at-high-fps sensor.
+
+**Fixed:** golf ball Ø 42.67 mm; hitting zone ~150 mm; two cameras; overhead-converging geometry.
+
+## The physics that drives the trade-offs
+
+These relationships are *why* the sweep matters — every config is a balance of them:
+
+- **Frames captured** ≈ `FOV_width · fps / ball_speed`. A 165 mph ball travels ~308 mm per frame at 240 fps. Higher mount / wider lens = more frames but a smaller ball; higher fps = more frames at fixed cost in $$.
+- **Ball size in pixels** ≈ `f_px · D_ball / distance`. Detection and triangulation precision scale with this. Longer focal, higher res, or closer mount help — but shrink the FOV and frame count.
+- **Triangulation depth precision** ∝ `distance² / (baseline · f_px)`. Wider baseline, longer focal, closer mount = better depth.
+- **Motion-blur streak** ≈ `ball_speed · exposure · f_px / distance`. Must stay well under the ball size to "freeze" — which forces short exposures and therefore more light (IR strobe) at high speed.
+
+The optimum is a saddle: push any single knob and another degrades. Finding it empirically across the shot envelope is the whole point.
+
+## Cost model (rough, refine with real listings)
+
+The output we want is an **accuracy-vs-dollars Pareto frontier**, so configs need a cost estimate. Rough order-of-magnitude per camera (×2 for stereo):
+
+| Capability | ~Cost each |
+|---|---|
+| 120 fps, 1 MP, global shutter | $50–100 |
+| 240–480 fps, ~0.5–1 MP | $150–400 |
+| 960 fps+ | $500–1500 |
+| Multi-kfps | thousands (out of scope) |
+
+Plus lens ($20–80), IR strobe LEDs + driver ($20–60), mounts, and a compute box (Raspberry Pi / mini-PC). These are placeholders — replace with real part numbers as candidates emerge.
+
+## Methodology
+
+1. **Config as data** — one config file per candidate rig (camera + optics + geometry + lighting), read by *both* the Blender renderer and the Rust solver (single source of truth; today the params are hardcoded in two places).
+2. **Sweep** — render the shot envelope for each config, run the solver, record errors vs ground truth.
+3. **Aggregate** — per config: does it clear "Useful" / "Good" across the envelope, and what's the worst-case error?
+4. **Frontier** — cross accuracy against the cost model → the cheapest config(s) that pass → the recommended build.
+
+## Simulation fidelity — what's modeled, what isn't
+
+Honest accounting, because it bounds what the results mean.
+
+**Modeled today:** geometry, optics as an ideal pinhole, resolution, frame rate, basic lighting, constant-velocity trajectory, exact ground truth.
+
+**Not yet modeled (Phase 3):** sensor noise, motion blur from finite exposure, rolling shutter, bit-depth quantization, lens distortion, compression artifacts.
+
+This matters: a clean pinhole render gives the **geometric ceiling** for a configuration. It cannot yet distinguish a $60 noisy rolling-shutter camera from a $2000 global-shutter one at the same fps/resolution. Modeling the sensor degradations is what turns "this geometry could work" into "this *hardware* will work," and is required before any cost claim is trustworthy.
+
+## Roadmap
+
+1. **Document the goal** (this file). ✅
+2. **Config-driven sweep** — make rig params data; build the sweep + accuracy aggregation. Answers the geometric trade-offs.
+3. **Sensor realism** — noise, motion blur, rolling shutter, bit depth — so "cheap vs expensive" actually diverges and the cost frontier becomes real.
