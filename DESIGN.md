@@ -91,6 +91,11 @@ Plus lens ($20–80), IR strobe LEDs + driver ($20–60), mounts, and a compute 
 3. **Aggregate** — per config: does it clear "Useful" / "Good" across the envelope, and what's the worst-case error?
 4. **Frontier** — cross accuracy against the cost model → the cheapest config(s) that pass → the recommended build.
 
+Implemented by `lm-sweep` (`configs/sweep.json` → `results/sweep.csv` + a printed cost frontier). Two caveats on current results:
+
+- **Resolution is modeled as a sensor crop at fixed pixel pitch** (fewer pixels = narrower FOV), so lower-res configs catch *fewer frames* of a fast ball. A real cheap camera might instead trade pixel pitch or lens, so treat the resolution axis as one interpretation, not gospel.
+- **Accuracy is still the geometric ceiling** (clean pinhole, Phase 3 not done): every config that captures ≥2 frames currently passes "Good" easily, so the binding constraint right now is *frame count* (FOV × fps vs ball speed), not pixel precision. The frontier only becomes a real accuracy-vs-cost trade once sensor realism is added.
+
 ## Simulation fidelity — what's modeled, what isn't
 
 Honest accounting, because it bounds what the results mean.

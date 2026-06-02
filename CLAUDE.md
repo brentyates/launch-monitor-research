@@ -19,6 +19,9 @@ cargo test                             # Run unit tests
 ./scripts/view.sh <case> [--debug]     # Stereo contact sheet + MP4 into viz/<case>/ (--debug = overlays)
 ./scripts/cleanup.sh                   # Remove renders/ and debug frames
 
+cargo build --release --bin lm-sweep                 # Build the hardware-config sweep
+RENDER=1 ./target/release/lm-sweep [configs/sweep.json]  # Sweep configs -> results/sweep.csv + cost frontier
+
 RUST_LOG=debug cargo run               # Run with debug logging
 ```
 

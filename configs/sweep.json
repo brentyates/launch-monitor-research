@@ -1,0 +1,15 @@
+{
+  "shots": [
+    { "name": "driver", "speed_mph": 165.0, "vla_deg": 10.5, "hla_deg": -2.5, "spin_rpm": 2700.0, "spin_axis_deg": -5.0 },
+    { "name": "7-iron", "speed_mph": 120.0, "vla_deg": 16.0, "hla_deg": 1.2, "spin_rpm": 7000.0, "spin_axis_deg": 2.0 },
+    { "name": "wedge", "speed_mph": 85.0, "vla_deg": 28.0, "hla_deg": -0.8, "spin_rpm": 9500.0, "spin_axis_deg": 0.0 }
+  ],
+  "configs": [
+    { "name": "baseline_240_512", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 512, "height": 384, "fps": 240.0, "samples": 32 },
+    { "name": "fps120_512", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 512, "height": 384, "fps": 120.0, "samples": 32 },
+    { "name": "fps480_512", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 512, "height": 384, "fps": 480.0, "samples": 32 },
+    { "name": "res320_240", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 320, "height": 240, "fps": 240.0, "samples": 32 },
+    { "name": "res728_240", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 728, "height": 544, "fps": 240.0, "samples": 32 },
+    { "name": "cheap_120_320", "baseline_mm": 350.0, "height_mm": 3048.0, "forward_mm": 1092.0, "focal_mm": 6.0, "pixel_pitch_mm": 0.00508, "width": 320, "height": 240, "fps": 120.0, "samples": 32 }
+  ]
+}

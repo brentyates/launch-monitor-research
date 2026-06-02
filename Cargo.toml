@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "lm-test"
 path = "src/main.rs"
 
+[[bin]]
+name = "lm-sweep"
+path = "src/sweep.rs"
+
 [dependencies]
 nalgebra = "0.33"
 image = "0.25"
