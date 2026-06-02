@@ -104,58 +104,111 @@ pub fn estimate_spin_dense(frames: &[FrameSpin], fps: f64) -> Option<InterframeS
     let coarse_axes = fib_sphere(96);
     let coarse_thetas: Vec<f64> = (1..=13).map(|i| (i as f64 * 10.0).to_radians()).collect();
 
-    let mut rates = Vec::new();
-    let mut axes = Vec::new();
-    let mut nccs = Vec::new();
+    let n = frames.len();
+    let max_k = (n - 1).min(8);
+    let target = 9.0_f64.to_radians();
+    let lo = 6.0_f64.to_radians();
 
-    for i in 0..frames.len() - 1 {
-        let a = &samples[i];
-        let hp_b = &hps[i + 1];
-        let cb = (frames[i + 1].center_x, frames[i + 1].center_y);
-        let rb = frames[i + 1].radius;
-        if a.len() < 30 {
-            continue;
-        }
+    let hi = 16.0_f64.to_radians();
 
-        let mut hyps: Vec<(Vector3<f64>, f64)> = Vec::new();
-        for &ax in &coarse_axes {
-            for &th in &coarse_thetas {
-                hyps.push((ax, th));
-            }
-        }
-        let coarse = best_hypothesis(&hyps, a, hp_b, cb, rb);
-
-        let mut fine: Vec<(Vector3<f64>, f64)> = Vec::new();
-        let neighbors = perturbed_axes(coarse.0, 8.0_f64.to_radians());
-        let mut th = (coarse.1 - 12.0_f64.to_radians()).max(0.5_f64.to_radians());
-        while th <= coarse.1 + 12.0_f64.to_radians() {
-            for &ax in &neighbors {
-                fine.push((ax, th));
-            }
-            th += 0.5_f64.to_radians();
-        }
-        let best = best_hypothesis(&fine, a, hp_b, cb, rb);
-
-        let r = rot_axis_angle(best.0, best.1);
-        let (angle, axis) = rotation_angle_axis(&r);
-        if angle > 1e-4 && best.2 > 0.0 {
-            rates.push(angle * fps * 60.0 / (2.0 * std::f64::consts::PI));
-            axes.push(axis);
-            nccs.push(best.2);
+    let mut cands: Vec<(usize, f64, f64, Vector3<f64>)> = Vec::new();
+    for k in 1..=max_k {
+        if let Some((med, ncc, axis)) =
+            measure_spacing(k, frames, &samples, &hps, &coarse_axes, &coarse_thetas)
+        {
+            cands.push((k, med, ncc, axis));
         }
     }
-
-    if rates.is_empty() {
+    if cands.is_empty() {
         return None;
     }
 
-    rates.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let rpm = rates[rates.len() / 2];
-    let axis_mean = axes.iter().fold(Vector3::zeros(), |acc, a| acc + a) / axes.len() as f64;
-    let axis_deg = axis_mean.y.atan2(axis_mean.x).to_degrees();
-    let confidence = nccs.iter().sum::<f64>() / nccs.len() as f64;
+    let chosen = cands
+        .iter()
+        .filter(|c| c.1 >= lo && c.1 <= hi)
+        .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+        .or_else(|| {
+            cands
+                .iter()
+                .min_by(|a, b| (a.1 - target).abs().partial_cmp(&(b.1 - target).abs()).unwrap())
+        })
+        .copied()
+        .unwrap();
 
-    Some(InterframeSpin { rpm, axis_deg, confidence, pairs: rates.len() })
+    let (k, med_theta, ncc, axis) = chosen;
+    let rpm = med_theta * fps * 60.0 / (2.0 * std::f64::consts::PI * k as f64);
+    let axis_deg = axis.y.atan2(axis.x).to_degrees();
+    Some(InterframeSpin { rpm, axis_deg, confidence: ncc, pairs: k })
+}
+
+fn measure_spacing(
+    k: usize,
+    frames: &[FrameSpin],
+    samples: &[Vec<(Vector3<f64>, f64)>],
+    hps: &[HpImage],
+    coarse_axes: &[Vector3<f64>],
+    coarse_thetas: &[f64],
+) -> Option<(f64, f64, Vector3<f64>)> {
+    let n = frames.len();
+    if k >= n {
+        return None;
+    }
+    let mut ths = Vec::new();
+    let mut nccs = Vec::new();
+    let mut axs: Vec<Vector3<f64>> = Vec::new();
+    for i in 0..n - k {
+        if samples[i].len() < 30 {
+            continue;
+        }
+        let cb = (frames[i + k].center_x, frames[i + k].center_y);
+        let rb = frames[i + k].radius;
+        let (axis, angle, nccv) =
+            register(&samples[i], &hps[i + k], cb, rb, coarse_axes, coarse_thetas);
+        if nccv > 0.0 && angle > 1e-4 {
+            ths.push(angle);
+            nccs.push(nccv);
+            axs.push(axis);
+        }
+    }
+    if ths.is_empty() {
+        return None;
+    }
+    ths.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let med = ths[ths.len() / 2];
+    let mean_ncc = nccs.iter().sum::<f64>() / nccs.len() as f64;
+    let mean_axis = axs.iter().fold(Vector3::zeros(), |a, b| a + b) / axs.len() as f64;
+    Some((med, mean_ncc, mean_axis))
+}
+
+fn register(
+    a: &[(Vector3<f64>, f64)],
+    hp_b: &HpImage,
+    cb: (f64, f64),
+    rb: f64,
+    coarse_axes: &[Vector3<f64>],
+    coarse_thetas: &[f64],
+) -> (Vector3<f64>, f64, f64) {
+    let mut hyps: Vec<(Vector3<f64>, f64)> = Vec::new();
+    for &ax in coarse_axes {
+        for &th in coarse_thetas {
+            hyps.push((ax, th));
+        }
+    }
+    let coarse = best_hypothesis(&hyps, a, hp_b, cb, rb);
+
+    let mut fine: Vec<(Vector3<f64>, f64)> = Vec::new();
+    let neighbors = perturbed_axes(coarse.0, 8.0_f64.to_radians());
+    let mut th = (coarse.1 - 12.0_f64.to_radians()).max(0.5_f64.to_radians());
+    while th <= coarse.1 + 12.0_f64.to_radians() {
+        for &ax in &neighbors {
+            fine.push((ax, th));
+        }
+        th += 0.5_f64.to_radians();
+    }
+    let best = best_hypothesis(&fine, a, hp_b, cb, rb);
+    let r = rot_axis_angle(best.0, best.1);
+    let (angle, axis) = rotation_angle_axis(&r);
+    (axis, angle, best.2)
 }
 
 fn ball_samples(hp: &HpImage, center: (f64, f64), radius: f64) -> Vec<(Vector3<f64>, f64)> {
