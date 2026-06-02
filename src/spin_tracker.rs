@@ -319,6 +319,110 @@ fn rot_axis_angle(axis: Vector3<f64>, theta: f64) -> Matrix3<f64> {
     Matrix3::identity() + kx * s + kx * kx * (1.0 - c)
 }
 
+pub fn estimate_spin_global(frames: &[FrameSpin], fps: f64) -> Option<InterframeSpin> {
+    if frames.len() < 2 {
+        return None;
+    }
+    let hps: Vec<HpImage> = frames
+        .iter()
+        .map(|f| HpImage::from_gray(&f.gray, (0.30 * f.radius) as f32))
+        .collect();
+    let samples: Vec<Vec<(Vector3<f64>, f64)>> = frames
+        .iter()
+        .zip(hps.iter())
+        .map(|(f, hp)| ball_samples(hp, (f.center_x, f.center_y), f.radius))
+        .collect();
+    if samples.iter().filter(|s| s.len() >= 30).count() < 2 {
+        return None;
+    }
+
+    let axes = fib_sphere(120);
+    let coarse_thetas: Vec<f64> = (1..=40).map(|i| (i as f64 * 2.0).to_radians()).collect();
+    let mut hyps: Vec<(Vector3<f64>, f64)> = Vec::new();
+    for &ax in &axes {
+        for &th in &coarse_thetas {
+            hyps.push((ax, th));
+        }
+    }
+    let coarse = hyps
+        .par_iter()
+        .map(|&(ax, th)| (ax, th, score_global(ax, th, &samples, &hps, frames)))
+        .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+        .unwrap();
+
+    let neighbors = perturbed_axes(coarse.0, 6.0_f64.to_radians());
+    let mut fine: Vec<(Vector3<f64>, f64)> = Vec::new();
+    let mut th = (coarse.1 - 8.0_f64.to_radians()).max(1.0_f64.to_radians());
+    while th <= coarse.1 + 8.0_f64.to_radians() {
+        for &ax in &neighbors {
+            fine.push((ax, th));
+        }
+        th += 0.5_f64.to_radians();
+    }
+    let best = fine
+        .par_iter()
+        .map(|&(ax, th)| (ax, th, score_global(ax, th, &samples, &hps, frames)))
+        .max_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+        .unwrap();
+
+    if best.2 <= 0.0 {
+        return None;
+    }
+    let rpm = best.1 * fps * 60.0 / (2.0 * std::f64::consts::PI);
+    let axis_deg = best.0.y.atan2(best.0.x).to_degrees();
+    Some(InterframeSpin { rpm, axis_deg, confidence: best.2, pairs: frames.len() - 1 })
+}
+
+fn score_global(
+    axis: Vector3<f64>,
+    theta: f64,
+    samples: &[Vec<(Vector3<f64>, f64)>],
+    hps: &[HpImage],
+    frames: &[FrameSpin],
+) -> f64 {
+    let r = rot_axis_angle(axis, theta);
+    let mut total = 0.0;
+    let mut cnt = 0;
+    for i in 0..frames.len() - 1 {
+        if samples[i].len() < 30 {
+            continue;
+        }
+        let cb = (frames[i + 1].center_x, frames[i + 1].center_y);
+        let rb = frames[i + 1].radius;
+        let c = ncc_under_rotation(&r, &samples[i], &hps[i + 1], cb, rb);
+        if c > -1.5 {
+            total += c;
+            cnt += 1;
+        }
+    }
+    if cnt > 0 {
+        total / cnt as f64
+    } else {
+        -2.0
+    }
+}
+
+fn ncc_under_rotation(
+    r: &Matrix3<f64>,
+    a: &[(Vector3<f64>, f64)],
+    hp_b: &HpImage,
+    cb: (f64, f64),
+    rb: f64,
+) -> f64 {
+    let mut va = Vec::with_capacity(a.len());
+    let mut vb = Vec::with_capacity(a.len());
+    for (p, ia) in a {
+        let p2 = r * p;
+        if p2.z > 0.1 {
+            if let Some(ib) = hp_b.sample(cb.0 + p2.x * rb, cb.1 + p2.y * rb) {
+                va.push(*ia);
+                vb.push(ib);
+            }
+        }
+    }
+    ncc(&va, &vb)
+}
+
 fn backproject(features: &[(f64, f64)], center: (f64, f64), radius: f64) -> Vec<Vector3<f64>> {
     features
         .iter()

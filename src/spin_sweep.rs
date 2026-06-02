@@ -1,7 +1,7 @@
 use image::GrayImage;
 use launch_monitor_research::{
-    estimate_spin_dense, estimate_spin_interframe, load_rig_dataset, BallDetector, FrameSpin,
-    SpinDetector,
+    estimate_spin_dense, estimate_spin_global, estimate_spin_interframe, load_rig_dataset,
+    BallDetector, FrameSpin, SpinDetector,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -186,7 +186,10 @@ fn detect_spin(grays: &[GrayImage], fps: f64) -> Option<(f64, f64, f64, usize)> 
     let ball_px = 2.0 * radii[radii.len() / 2];
 
     let method = std::env::var("SPIN_METHOD").unwrap_or_else(|_| "search".to_string());
-    if method == "dense" {
+    if method == "global" {
+        let s = estimate_spin_global(&frames, fps)?;
+        Some((s.rpm, s.axis_deg, ball_px, frames.len()))
+    } else if method == "dense" {
         let s = estimate_spin_dense(&frames, fps)?;
         Some((s.rpm, s.axis_deg, ball_px, frames.len()))
     } else if method == "interframe" {
